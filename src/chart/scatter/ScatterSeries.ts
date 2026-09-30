@@ -23,7 +23,8 @@ import {
     SeriesOption,
     SeriesOnCartesianOptionMixin,
     SeriesOnPolarOptionMixin,
-    SeriesOnCalendarOptionMixin,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
     SeriesOnGeoOptionMixin,
     SeriesOnSingleOptionMixin,
     OptionDataValue,
@@ -41,6 +42,7 @@ import {
 import GlobalModel from '../../model/Global';
 import SeriesData from '../../data/SeriesData';
 import { BrushCommonSelectorsForSeries } from '../../component/brush/selector';
+import tokens from '../../visual/tokens';
 
 interface ScatterStateOption<TCbParams = never> {
     itemStyle?: ItemStyleOption<TCbParams>
@@ -50,7 +52,7 @@ interface ScatterStateOption<TCbParams = never> {
 interface ScatterStatesOptionMixin {
     emphasis?: {
         focus?: DefaultEmphasisFocus
-        scale?: boolean
+        scale?: boolean | number
     }
 }
 
@@ -62,7 +64,8 @@ export interface ScatterDataItemOption extends SymbolOptionMixin,
 export interface ScatterSeriesOption
     extends SeriesOption<ScatterStateOption<CallbackDataParams>, ScatterStatesOptionMixin>,
     ScatterStateOption<CallbackDataParams>,
-    SeriesOnCartesianOptionMixin, SeriesOnPolarOptionMixin, SeriesOnCalendarOptionMixin,
+    SeriesOnCartesianOptionMixin, SeriesOnPolarOptionMixin,
+    ComponentOnCalendarOptionMixin, ComponentOnMatrixOptionMixin,
     SeriesOnGeoOptionMixin, SeriesOnSingleOptionMixin,
     SeriesLargeOptionMixin, SeriesStackOptionMixin,
     SymbolOptionMixin<CallbackDataParams>, SeriesEncodeOptionMixin {
@@ -82,7 +85,7 @@ class ScatterSeriesModel extends SeriesModel<ScatterSeriesOption> {
     static readonly type = 'series.scatter';
     type = ScatterSeriesModel.type;
 
-    static readonly dependencies = ['grid', 'polar', 'geo', 'singleAxis', 'calendar'];
+    static readonly dependencies = ['grid', 'polar', 'geo', 'singleAxis', 'calendar', 'matrix'];
 
     hasSymbolVisual = true;
 
@@ -115,14 +118,20 @@ class ScatterSeriesModel extends SeriesModel<ScatterSeriesOption> {
         return selectors.point(data.getItemLayout(dataIndex));
     }
 
+    getZLevelKey() {
+        // PENDING: See `GET_ZLEVEL_KEY_FOR_PROGRESSIVE`
+        return this.getData().count() > this.getProgressiveThreshold()
+            ? this.id : '';
+    }
+
     static defaultOption: ScatterSeriesOption = {
         coordinateSystem: 'cartesian2d',
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
         legendHoverLink: true,
 
-        symbolSize: 10,          // 图形大小，半宽（半径）参数，当图形为方向或菱形则总宽度为symbolSize * 2
-        // symbolRotate: null,  // 图形旋转控制
+        symbolSize: 10,
+        // symbolRotate: null,
 
         large: false,
         // Available when large is true
@@ -131,20 +140,17 @@ class ScatterSeriesModel extends SeriesModel<ScatterSeriesOption> {
 
         itemStyle: {
             opacity: 0.8
-            // color: 各异
         },
 
         emphasis: {
             scale: true
         },
 
-        // If clip the overflow graphics
-        // Works on cartesian / polar series
         clip: true,
 
         select: {
             itemStyle: {
-                borderColor: '#212121'
+                borderColor: tokens.color.primary
             }
         },
 

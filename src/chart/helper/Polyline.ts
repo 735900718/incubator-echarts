@@ -18,9 +18,11 @@
 */
 
 import * as graphic from '../../util/graphic';
-import { enableHoverEmphasis } from '../../util/states';
-import type { LineDrawSeriesScope, LineDrawModelOption } from './LineDraw';
+import { toggleHoverEmphasis } from '../../util/states';
+import type { LineDrawSeriesScope } from './LineDraw';
 import type SeriesData from '../../data/SeriesData';
+import { BlurScope, DefaultEmphasisFocus } from '../../util/types';
+import { LineDrawModelOption } from './baseDraw';
 
 class Polyline extends graphic.Group {
     constructor(lineData: SeriesData, idx: number, seriesScope: LineDrawSeriesScope) {
@@ -62,23 +64,32 @@ class Polyline extends graphic.Group {
         const itemModel = lineData.getItemModel<LineDrawModelOption>(idx);
 
 
-        let hoverLineStyle = seriesScope && seriesScope.emphasisLineStyle;
+        let emphasisLineStyle = seriesScope && seriesScope.emphasisLineStyle;
+        let focus = (seriesScope && seriesScope.focus) as DefaultEmphasisFocus;
+        let blurScope = (seriesScope && seriesScope.blurScope) as BlurScope;
+        let emphasisDisabled = seriesScope && seriesScope.emphasisDisabled;
+
 
         if (!seriesScope || lineData.hasItemOption) {
-            hoverLineStyle = itemModel.getModel(['emphasis', 'lineStyle']).getLineStyle();
+            const emphasisModel = itemModel.getModel('emphasis');
+            emphasisLineStyle = emphasisModel.getModel('lineStyle').getLineStyle();
+            emphasisDisabled = emphasisModel.get('disabled');
+            focus = emphasisModel.get('focus');
+            blurScope = emphasisModel.get('blurScope');
         }
         line.useStyle(lineData.getItemVisual(idx, 'style'));
         line.style.fill = null;
         line.style.strokeNoScale = true;
 
         const lineEmphasisState = line.ensureState('emphasis');
-        lineEmphasisState.style = hoverLineStyle;
+        lineEmphasisState.style = emphasisLineStyle;
 
-        enableHoverEmphasis(this);
+        toggleHoverEmphasis(this, focus, blurScope, emphasisDisabled);
     };
 
     updateLayout(lineData: SeriesData, idx: number) {
         const polyline = this.childAt(0) as graphic.Polyline;
+        polyline.stopAnimation();
         polyline.setShape('points', lineData.getItemLayout(idx));
     };
 

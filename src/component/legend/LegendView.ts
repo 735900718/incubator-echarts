@@ -18,7 +18,6 @@
 */
 
 import * as zrUtil from 'zrender/src/core/util';
-import { DisplayableState } from 'zrender/src/graphic/Displayable';
 import { PathStyleProps } from 'zrender/src/graphic/Path';
 import { parse, stringify } from 'zrender/src/tool/color';
 import * as graphic from '../../util/graphic';
@@ -43,13 +42,17 @@ import {
     CommonTooltipOption,
     ColorString,
     SeriesOption,
-    SymbolOptionMixin
+    SymbolOptionMixin,
+    ItemStyleOption
 } from '../../util/types';
 import Model from '../../model/Model';
-import {LineStyleProps, LINE_STYLE_KEY_MAP} from '../../model/mixin/lineStyle';
-import {ITEM_STYLE_KEY_MAP} from '../../model/mixin/itemStyle';
+import {LineStyleProps} from '../../model/mixin/lineStyle';
 import {createSymbol, ECSymbol} from '../../util/symbol';
 import SeriesModel from '../../model/Series';
+import { createOrUpdatePatternFromDecal } from '../../util/decal';
+import { getECData } from '../../util/innerStore';
+import tokens from '../../visual/tokens';
+import Element from 'zrender/src/Element';
 
 const curry = zrUtil.curry;
 const each = zrUtil.each;
@@ -69,7 +72,7 @@ class LegendView extends ComponentView {
 
     /**
      * If first rendering, `contentGroup.position` is [0, 0], which
-     * does not make sense and may cause unexepcted animation if adopted.
+     * does not make sense and may cause unexpected animation if adopted.
      */
     private _isFirstRender: boolean;
 
@@ -131,11 +134,11 @@ class LegendView extends ComponentView {
         this.renderInner(itemAlign, legendModel, ecModel, api, selector, orient, selectorPosition);
 
         // Perform layout.
+        const refContainer = layoutUtil.createBoxLayoutReference(legendModel, api).refContainer;
         const positionInfo = legendModel.getBoxLayoutParams();
-        const viewportSize = {width: api.getWidth(), height: api.getHeight()};
         const padding = legendModel.get('padding');
 
-        const maxSize = layoutUtil.getLayoutRect(positionInfo, viewportSize, padding);
+        const maxSize = layoutUtil.getLayoutRect(positionInfo, refContainer, padding);
 
         const mainRect = this.layoutInner(legendModel, itemAlign, maxSize, isFirstRender, selector, selectorPosition);
 
@@ -145,7 +148,7 @@ class LegendView extends ComponentView {
                 width: mainRect.width,
                 height: mainRect.height
             }, positionInfo),
-            viewportSize,
+            refContainer,
             padding
         );
         this.group.x = layoutRect.x - mainRect.x;
@@ -154,7 +157,11 @@ class LegendView extends ComponentView {
 
         // Render background after group is layout.
         this.group.add(
-            this._backgroundEl = makeBackground(mainRect, legendModel)
+            this._backgroundEl = makeBackground(
+                mainRect,
+                // FXIME: most itemStyle options does not work in background because inherit is not handled yet.
+                legendModel as Model<Omit<LegendOption, 'itemStyle'> & {itemStyle: ItemStyleOption}>
+            )
         );
     }
 
@@ -176,6 +183,7 @@ class LegendView extends ComponentView {
         const contentGroup = this.getContentGroup();
         const legendDrawnMap = zrUtil.createHashMap();
         const selectMode = legendModel.get('selectedMode');
+        const triggerEvent = legendModel.get('triggerEvent');
 
         const excludeSeriesId: string[] = [];
         ecModel.eachRawSeries(function (seriesModel) {
@@ -199,7 +207,7 @@ class LegendView extends ComponentView {
                 SeriesModel<SeriesOption & SymbolOptionMixin>;
 
             if (legendDrawnMap.get(name)) {
-                // Have been drawed
+                // Have been drawn
                 return;
             }
 
@@ -218,12 +226,26 @@ class LegendView extends ComponentView {
                 const itemGroup = this._createItem(
                     seriesModel, name, dataIndex,
                     legendItemModel, legendModel, itemAlign,
-                    lineVisualStyle, style, legendIcon, selectMode
+                    lineVisualStyle, style, legendIcon, selectMode, api
                 );
 
                 itemGroup.on('click', curry(dispatchSelectAction, name, null, api, excludeSeriesId))
                     .on('mouseover', curry(dispatchHighlightAction, seriesModel.name, null, api, excludeSeriesId))
                     .on('mouseout', curry(dispatchDownplayAction, seriesModel.name, null, api, excludeSeriesId));
+
+                if (ecModel.ssr) {
+                    itemGroup.eachChild(child => {
+                        const ecData = getECData(child);
+                        ecData.seriesIndex = seriesModel.seriesIndex;
+                        ecData.dataIndex = dataIndex;
+                        ecData.ssrType = 'legend';
+                    });
+                }
+                if (triggerEvent) {
+                    itemGroup.eachChild(child => {
+                        this.packEventData(child, legendModel, seriesModel, dataIndex, name);
+                    });
+                }
 
                 legendDrawnMap.set(name, true);
             }
@@ -244,7 +266,7 @@ class LegendView extends ComponentView {
 
                         const idx = provider.indexOfName(name);
 
-                        const style = provider.getItemVisual(idx, 'style') as PathStyleProps;
+                        let style = provider.getItemVisual(idx, 'style') as PathStyleProps;
                         const legendIcon = provider.getItemVisual(idx, 'legendIcon');
 
                         const colorArr = parse(style.fill as ColorString);
@@ -253,13 +275,13 @@ class LegendView extends ComponentView {
                         if (colorArr && colorArr[3] === 0) {
                             colorArr[3] = 0.2;
                             // TODO color is set to 0, 0, 0, 0. Should show correct RGBA
-                            style.fill = stringify(colorArr, 'rgba');
+                            style = zrUtil.extend(zrUtil.extend({}, style), { fill: stringify(colorArr, 'rgba') });
                         }
 
                         const itemGroup = this._createItem(
                             seriesModel, name, dataIndex,
                             legendItemModel, legendModel, itemAlign,
-                            {}, style, legendIcon, selectMode
+                            {}, style, legendIcon, selectMode, api
                         );
 
                         // FIXME: consider different series has items with the same name.
@@ -269,6 +291,19 @@ class LegendView extends ComponentView {
                             .on('mouseover', curry(dispatchHighlightAction, null, name, api, excludeSeriesId))
                             .on('mouseout', curry(dispatchDownplayAction, null, name, api, excludeSeriesId));
 
+                        if (ecModel.ssr) {
+                            itemGroup.eachChild(child => {
+                                const ecData = getECData(child);
+                                ecData.seriesIndex = seriesModel.seriesIndex;
+                                ecData.dataIndex = dataIndex;
+                                ecData.ssrType = 'legend';
+                            });
+                        }
+                        if (triggerEvent) {
+                            itemGroup.eachChild(child => {
+                                this.packEventData(child, legendModel, seriesModel, dataIndex, name);
+                            });
+                        }
                         legendDrawnMap.set(name, true);
                     }
 
@@ -288,7 +323,22 @@ class LegendView extends ComponentView {
             this._createSelector(selector, legendModel, api, orient, selectorPosition);
         }
     }
-
+    private packEventData(
+        el: Element,
+        legendModel: LegendModel,
+        seriesModel: SeriesModel<SeriesOption & SymbolOptionMixin>,
+        dataIndex: number,
+        name: string
+    ) {
+        const eventData = {
+            componentType: 'legend',
+            componentIndex: legendModel.componentIndex,
+            dataIndex,
+            value: name,
+            seriesIndex: seriesModel.seriesIndex,
+        };
+        getECData(el).eventData = eventData;
+    };
     private _createSelector(
         selector: LegendSelectorButtonOption[],
         legendModel: LegendModel,
@@ -310,7 +360,8 @@ class LegendView extends ComponentView {
                 },
                 onclick() {
                     api.dispatchAction({
-                        type: type === 'all' ? 'legendAllSelect' : 'legendInverseSelect'
+                        type: type === 'all' ? 'legendAllSelect' : 'legendInverseSelect',
+                        legendId: legendModel.id
                     });
                 }
             });
@@ -340,7 +391,8 @@ class LegendView extends ComponentView {
         lineVisualStyle: LineStyleProps,
         itemVisualStyle: PathStyleProps,
         legendIcon: string,
-        selectMode: LegendOption['selectedMode']
+        selectMode: LegendOption['selectedMode'],
+        api: ExtensionAPI
     ) {
         const drawType = seriesModel.visualDrawType;
         const itemWidth = legendModel.get('itemWidth');
@@ -359,14 +411,15 @@ class LegendView extends ComponentView {
             lineVisualStyle,
             itemVisualStyle,
             drawType,
-            isSelected
+            isSelected,
+            api
         );
 
         const itemGroup = new Group();
 
         const textStyleModel = legendItemModel.getModel('textStyle');
 
-        if (typeof seriesModel.getLegendIcon === 'function'
+        if (zrUtil.isFunction(seriesModel.getLegendIcon)
             && (!legendIconType || legendIconType === 'inherit')
         ) {
             // Series has specific way to define legend icon
@@ -404,29 +457,34 @@ class LegendView extends ComponentView {
 
         const formatter = legendModel.get('formatter');
         let content = name;
-        if (typeof formatter === 'string' && formatter) {
+        if (zrUtil.isString(formatter) && formatter) {
             content = formatter.replace('{name}', name != null ? name : '');
         }
-        else if (typeof formatter === 'function') {
+        else if (zrUtil.isFunction(formatter)) {
             content = formatter(name);
         }
 
-        const inactiveColor = legendItemModel.get('inactiveColor');
+        const textColor = isSelected
+            ? textStyleModel.getTextColor() : legendItemModel.get('inactiveColor');
+
         itemGroup.add(new graphic.Text({
             style: createTextStyle(textStyleModel, {
                 text: content,
                 x: textX,
                 y: itemHeight / 2,
-                fill: isSelected ? textStyleModel.getTextColor() : inactiveColor,
+                fill: textColor,
                 align: textAlign,
                 verticalAlign: 'middle'
-            })
+            }, {inheritColor: textColor})
         }));
 
         // Add a invisible rect to increase the area of mouse hover
         const hitRect = new graphic.Rect({
             shape: itemGroup.getBoundingRect(),
-            invisible: true
+            style: {
+                // Cannot use 'invisible' because SVG SSR will miss the node
+                fill: 'transparent'
+            }
         });
 
         const tooltipModel =
@@ -508,7 +566,7 @@ class LegendView extends ComponentView {
                 contentPos[orientIdx] += selectorRect[wh] + selectorButtonGap;
             }
 
-            //Always align selector to content as 'middle'
+            // Always align selector to content as 'middle'
             selectorPos[1 - orientIdx] += contentRect[hw] / 2 - selectorRect[hw] / 2;
             selectorGroup.x = selectorPos[0];
             selectorGroup.y = selectorPos[1];
@@ -540,11 +598,12 @@ class LegendView extends ComponentView {
 
 function getLegendStyle(
     iconType: string,
-    legendModel: LegendModel['_data'][number],
+    legendItemModel: LegendModel['_data'][number],
     lineVisualStyle: PathStyleProps,
     itemVisualStyle: PathStyleProps,
     drawType: 'fill' | 'stroke',
-    isSelected: boolean
+    isSelected: boolean,
+    api: ExtensionAPI
 ) {
     /**
      * Use series style if is inherit;
@@ -562,11 +621,14 @@ function getLegendStyle(
     }
 
     // itemStyle
-    const legendItemModel = legendModel.getModel('itemStyle') as Model<LegendItemStyleOption>;
-    const itemStyle = legendItemModel.getItemStyle();
+    const itemStyleModel = legendItemModel.getModel('itemStyle') as Model<LegendItemStyleOption>;
+    const itemStyle = itemStyleModel.getItemStyle();
     const iconBrushType = iconType.lastIndexOf('empty', 0) === 0 ? 'fill' : 'stroke';
+    const decalStyle = itemStyleModel.getShallow('decal');
+    itemStyle.decal = (!decalStyle || decalStyle === 'inherit')
+                    ? itemVisualStyle.decal
+                    : createOrUpdatePatternFromDecal(decalStyle, api);
 
-    itemStyle.decal = itemVisualStyle.decal;
     if (itemStyle.fill === 'inherit') {
         /**
          * Series with visualDrawType as 'stroke' should have
@@ -590,7 +652,7 @@ function getLegendStyle(
     handleCommonProps(itemStyle, itemVisualStyle);
 
     // lineStyle
-    const legendLineModel = legendModel.getModel('lineStyle') as Model<LegendLineStyleOption>;
+    const legendLineModel = legendItemModel.getModel('lineStyle') as Model<LegendLineStyleOption>;
     const lineStyle: LineStyleProps = legendLineModel.getLineStyle();
     handleCommonProps(lineStyle, lineVisualStyle);
 
@@ -600,7 +662,7 @@ function getLegendStyle(
     (lineStyle.stroke === 'auto') && (lineStyle.stroke = itemVisualStyle.fill);
 
     if (!isSelected) {
-        const borderWidth = legendModel.get('inactiveBorderWidth');
+        const borderWidth = legendItemModel.get('inactiveBorderWidth');
         /**
          * Since stroke is set to be inactiveBorderColor, it may occur that
          * there is no border in series but border in legend, so we need to
@@ -610,8 +672,8 @@ function getLegendStyle(
         itemStyle.lineWidth = borderWidth === 'auto'
             ? (itemVisualStyle.lineWidth > 0 && visualHasBorder ? 2 : 0)
             : itemStyle.lineWidth;
-        itemStyle.fill = legendModel.get('inactiveColor');
-        itemStyle.stroke = legendModel.get('inactiveBorderColor');
+        itemStyle.fill = legendItemModel.get('inactiveColor');
+        itemStyle.stroke = legendItemModel.get('inactiveBorderColor');
         lineStyle.stroke = legendLineModel.get('inactiveColor');
         lineStyle.lineWidth = legendLineModel.get('inactiveWidth');
     }
@@ -637,7 +699,7 @@ function getDefaultLegendIcon(opt: LegendIconParams): ECSymbol {
 
     if (symboType.indexOf('empty') > -1) {
         icon.style.stroke = icon.style.fill;
-        icon.style.fill = '#fff';
+        icon.style.fill = tokens.color.neutral00;
         icon.style.lineWidth = 2;
     }
 
@@ -657,19 +719,8 @@ function dispatchSelectAction(
         name: seriesName != null ? seriesName : dataName
     });
     // highlight after select
-    // TODO higlight immediately may cause animation loss.
+    // TODO highlight immediately may cause animation loss.
     dispatchHighlightAction(seriesName, dataName, api, excludeSeriesId);
-}
-
-function isUseHoverLayer(api: ExtensionAPI) {
-    const list = api.getZr().storage.getDisplayList();
-    let emphasisState: DisplayableState;
-    let i = 0;
-    const len = list.length;
-    while (i < len && !(emphasisState = list[i].states.emphasis)) {
-        i++;
-    }
-    return emphasisState && emphasisState.hoverLayer;
 }
 
 function dispatchHighlightAction(
@@ -678,8 +729,7 @@ function dispatchHighlightAction(
     api: ExtensionAPI,
     excludeSeriesId: string[]
 ) {
-    // If element hover will move to a hoverLayer.
-    if (!isUseHoverLayer(api)) {
+    if (!api.usingTHL()) {
         api.dispatchAction({
             type: 'highlight',
             seriesName: seriesName,
@@ -695,8 +745,7 @@ function dispatchDownplayAction(
     api: ExtensionAPI,
     excludeSeriesId: string[]
 ) {
-    // If element hover will move to a hoverLayer.
-    if (!isUseHoverLayer(api)) {
+    if (!api.usingTHL()) {
         api.dispatchAction({
             type: 'downplay',
             seriesName: seriesName,

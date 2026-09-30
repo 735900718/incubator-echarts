@@ -18,16 +18,16 @@
 */
 
 import * as graphic from '../../util/graphic';
-import { setStatesStylesFromModel, enableHoverEmphasis } from '../../util/states';
+import { setStatesStylesFromModel, toggleHoverEmphasis } from '../../util/states';
 import ChartView from '../../view/Chart';
-import FunnelSeriesModel, {FunnelDataItemOption} from './FunnelSeries';
+import FunnelSeriesModel, {FunnelDataItemOption, SERIES_TYPE_FUNNEL} from './FunnelSeries';
 import GlobalModel from '../../model/Global';
 import ExtensionAPI from '../../core/ExtensionAPI';
 import SeriesData from '../../data/SeriesData';
 import { ColorString } from '../../util/types';
 import { setLabelLineStyle, getLabelLineStatesModels } from '../../label/labelGuideHelper';
 import { setLabelStyle, getLabelStatesModels } from '../../label/labelStyle';
-import { saveOldStyle } from '../../animation/basicTrasition';
+import { saveOldStyle } from '../../animation/basicTransition';
 
 const opacityAccessPath = ['itemStyle', 'opacity'] as const;
 
@@ -92,7 +92,12 @@ class FunnelPiece extends graphic.Polygon {
 
         this._updateLabel(data, idx);
 
-        enableHoverEmphasis(this, emphasisModel.get('focus'), emphasisModel.get('blurScope'));
+        toggleHoverEmphasis(
+            this,
+            emphasisModel.get('focus'),
+            emphasisModel.get('blurScope'),
+            emphasisModel.get('disabled')
+        );
     }
 
     _updateLabel(data: SeriesData, idx: number) {
@@ -123,12 +128,17 @@ class FunnelPiece extends graphic.Polygon {
             } }
         );
 
+        const labelModel = itemModel.getModel('label');
+        const labelColor = labelModel.get('color');
+        const overrideColor = labelColor === 'inherit'
+            ? visualColor
+            : null;
+
         polygon.setTextConfig({
             local: true,
             inside: !!labelLayout.inside,
-            insideStroke: visualColor,
-            // insideFill: 'auto',
-            outsideFill: visualColor
+            insideStroke: overrideColor,
+            outsideFill: overrideColor
         });
 
         const linePoints = labelLayout.linePoints;
@@ -165,8 +175,8 @@ class FunnelPiece extends graphic.Polygon {
 }
 
 class FunnelView extends ChartView {
-    static type = 'funnel' as const;
-    type = FunnelView.type;
+    static readonly type = SERIES_TYPE_FUNNEL;
+    readonly type = SERIES_TYPE_FUNNEL;
 
     private _data: SeriesData;
 

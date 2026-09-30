@@ -1,4 +1,3 @@
-
 /*
 * Licensed to the Apache Software Foundation (ASF) under one
 * or more contributor license agreements.  See the NOTICE file
@@ -26,6 +25,7 @@ import { createSourceFromSeriesDataOption, Source, createSource } from '@/src/da
 import { OptionDataItemObject,
     OptionDataValue,
     SOURCE_FORMAT_ARRAY_ROWS,
+    SOURCE_FORMAT_OBJECT_ROWS,
     SOURCE_FORMAT_ORIGINAL } from '@/src/util/types';
 import SeriesDimensionDefine from '@/src/data/SeriesDimensionDefine';
 import OrdinalMeta from '@/src/data/OrdinalMeta';
@@ -207,6 +207,19 @@ describe('SeriesData', function () {
             expect(source.dimensionsDefine[0].type).toEqual('ordinal');
         });
 
+        it('should collect dimensions across all object rows', function () {
+            const source = createSource([
+                { timestamp: 1568191020000, ECM: 26311.466666666667 },
+                { timestamp: 1568191140000, ECM: 1666775.3333333333, GSWY: 1332.5333333333333 }
+            ], {
+                dimensions: null,
+                seriesLayoutBy: null,
+                sourceHeader: false
+            }, SOURCE_FORMAT_OBJECT_ROWS);
+
+            expect(source.dimensionsDefine.map(dim => dim.name)).toEqual(['timestamp', 'ECM', 'GSWY']);
+        });
+
         function createStore() {
             const provider = new DefaultDataProvider([['A', 15], ['B', 25], ['C', 35]]);
             const store = new DataStore();
@@ -262,26 +275,6 @@ describe('SeriesData', function () {
             data.initData(store);
             const data2 = data.cloneShallow();
             expect(data2.getStore()).toBe(data.getStore());
-        });
-    });
-
-    describe('Data read', function () {
-        it('indicesOfNearest', function () {
-            const data = new SeriesData(['value'], new Model());
-            // ---- index: 0   1   2   3   4   5   6   7
-            data.initData([10, 20, 30, 35, 40, 40, 35, 50]);
-
-            expect(data.indicesOfNearest('value', 24.5)).toEqual([1]);
-            expect(data.indicesOfNearest('value', 25)).toEqual([1]);
-            expect(data.indicesOfNearest('value', 25.5)).toEqual([2]);
-            expect(data.indicesOfNearest('value', 25.5)).toEqual([2]);
-            expect(data.indicesOfNearest('value', 41)).toEqual([4, 5]);
-            expect(data.indicesOfNearest('value', 39)).toEqual([4, 5]);
-            expect(data.indicesOfNearest('value', 41)).toEqual([4, 5]);
-            expect(data.indicesOfNearest('value', 36)).toEqual([3, 6]);
-
-            expect(data.indicesOfNearest('value', 50.6, 0.5)).toEqual([]);
-            expect(data.indicesOfNearest('value', 50.5, 0.5)).toEqual([7]);
         });
     });
 

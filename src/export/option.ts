@@ -26,13 +26,17 @@ import type {
     AngleAxisOption as AngleAxisComponentOption
 } from '../coord/polar/AxisModel';
 import type {
+    // Historical typo, deprecated but still exported for compatibility.
     XAXisOption as XAXisComponentOption,
-    YAXisOption as YAXisComponentOption
+    YAXisOption as YAXisComponentOption,
+    XAXisOption as XAxisComponentOption,
+    YAXisOption as YAxisComponentOption,
 } from '../coord/cartesian/AxisModel';
 import type {SingleAxisOption as SingleAxisComponentOption} from '../coord/single/AxisModel';
 import type {ParallelAxisOption as ParallelAxisComponentOption} from '../coord/parallel/AxisModel';
 import type {ParallelCoordinateSystemOption as ParallelComponentOption} from '../coord/parallel/ParallelModel';
 import type {CalendarOption as CalendarComponentOption} from '../coord/calendar/CalendarModel';
+import type {MatrixOption as MatrixComponentOption} from '../coord/matrix/MatrixModel';
 import type {ToolboxOption} from '../component/toolbox/ToolboxModel';
 import type {
     TooltipOption as TooltipComponentOption,
@@ -41,6 +45,7 @@ import type {
 import type {AxisPointerOption as AxisPointerComponentOption} from '../component/axisPointer/AxisPointerModel';
 import type {BrushOption as BrushComponentOption} from '../component/brush/BrushModel';
 import type {TitleOption as TitleComponentOption} from '../component/title/install';
+import type {ThumbnailOption as ThumbnailComponentOption} from '../component/thumbnail/ThumbnailModel';
 import type {TimelineOption as TimelineComponentOption} from '../component/timeline/TimelineModel';
 import type {SliderTimelineOption as TimelineSliderComponentOption} from '../component/timeline/SliderTimelineModel';
 
@@ -53,7 +58,7 @@ import type {SliderDataZoomOption as SliderDataZoomComponentOption} from '../com
 import type {InsideDataZoomOption as InsideDataZoomComponentOption} from '../component/dataZoom/InsideZoomModel';
 
 import type {
-    ContinousVisualMapOption as ContinousVisualMapComponentOption
+    ContinuousVisualMapOption as ContinuousVisualMapComponentOption
 } from '../component/visualMap/ContinuousModel';
 import type {
     PiecewiseVisualMapOption as PiecewiseVisualMapComponentOption
@@ -72,6 +77,7 @@ import type {MapSeriesOption as MapSeriesOptionInner} from '../chart/map/MapSeri
 import type {TreeSeriesOption as TreeSeriesOptionInner} from '../chart/tree/TreeSeries';
 import type {TreemapSeriesOption as TreemapSeriesOptionInner} from '../chart/treemap/TreemapSeries';
 import type {GraphSeriesOption as GraphSeriesOptionInner} from '../chart/graph/GraphSeries';
+import type {ChordSeriesOption as ChordSeriesOptionInner} from '../chart/chord/ChordSeries';
 import type {GaugeSeriesOption as GaugeSeriesOptionInner} from '../chart/gauge/GaugeSeries';
 import type {FunnelSeriesOption as FunnelSeriesOptionInner} from '../chart/funnel/FunnelSeries';
 import type {ParallelSeriesOption as ParallelSeriesOptionInner} from '../chart/parallel/ParallelSeries';
@@ -94,7 +100,7 @@ import type {
     CustomSeriesRenderItem
 } from '../chart/custom/CustomSeries';
 
-import type { GraphicComponentLooseOption as GraphicComponentOption } from '../component/graphic/install';
+import { GraphicComponentLooseOption as GraphicComponentOption } from '../component/graphic/GraphicModel';
 import type { DatasetOption as DatasetComponentOption } from '../component/dataset/install';
 
 import type {ToolboxBrushFeatureOption} from '../component/toolbox/feature/Brush';
@@ -139,8 +145,12 @@ interface ToolboxComponentOption extends ToolboxOption {
 
 export { SliderDataZoomComponentOption, InsideDataZoomComponentOption };
 export type DataZoomComponentOption = SliderDataZoomComponentOption | InsideDataZoomComponentOption;
-export { ContinousVisualMapComponentOption, PiecewiseVisualMapComponentOption };
-export type VisualMapComponentOption = ContinousVisualMapComponentOption | PiecewiseVisualMapComponentOption;
+export { ContinuousVisualMapComponentOption, PiecewiseVisualMapComponentOption };
+/**
+ * @deprecated Use `ContinuousVisualMapComponentOption` instead.
+ */
+export type ContinousVisualMapComponentOption = ContinuousVisualMapComponentOption;
+export type VisualMapComponentOption = ContinuousVisualMapComponentOption | PiecewiseVisualMapComponentOption;
 export { PlainLegendComponentOption, ScrollableLegendComponentOption };
 export type LegendComponentOption = PlainLegendComponentOption | ScrollableLegendComponentOption;
 export {
@@ -150,11 +160,14 @@ export {
     GeoComponentOption,
     XAXisComponentOption,
     YAXisComponentOption,
+    XAxisComponentOption,
+    YAxisComponentOption,
     SingleAxisComponentOption,
     RadiusAxisComponentOption,
     AngleAxisComponentOption,
     ParallelComponentOption,
     CalendarComponentOption,
+    MatrixComponentOption,
     TooltipComponentOption,
     AxisPointerComponentOption,
     BrushComponentOption,
@@ -164,6 +177,7 @@ export {
     MarkPointComponentOption,
     MarkAreaComponentOption,
     ToolboxComponentOption,
+    ThumbnailComponentOption,
     GraphicComponentOption,
     AriaComponentOption,
     DatasetComponentOption
@@ -187,6 +201,7 @@ export type MapSeriesOption = MapSeriesOptionInner & SeriesInjectedOption;
 export type TreeSeriesOption = TreeSeriesOptionInner & SeriesInjectedOption;
 export type TreemapSeriesOption = TreemapSeriesOptionInner & SeriesInjectedOption;
 export type GraphSeriesOption = GraphSeriesOptionInner & SeriesInjectedOption;
+export type ChordSeriesOption = ChordSeriesOptionInner & SeriesInjectedOption;
 export type GaugeSeriesOption = GaugeSeriesOptionInner & SeriesInjectedOption;
 export type FunnelSeriesOption = FunnelSeriesOptionInner & SeriesInjectedOption;
 export type ParallelSeriesOption = ParallelSeriesOptionInner & SeriesInjectedOption;
@@ -225,6 +240,7 @@ export interface RegisteredSeriesOption {
     tree: TreeSeriesOption
     treemap: TreemapSeriesOption
     graph: GraphSeriesOption
+    chord: ChordSeriesOption
     gauge: GaugeSeriesOption
     funnel: FunnelSeriesOption
     parallel: ParallelSeriesOption
@@ -259,6 +275,7 @@ export interface EChartsOption extends ECBasicOption {
     parallel?: ParallelComponentOption | ParallelComponentOption[];
     parallelAxis?: ParallelAxisComponentOption | ParallelAxisComponentOption[];
     calendar?: CalendarComponentOption | CalendarComponentOption[];
+    matrix?: MatrixComponentOption | MatrixComponentOption[];
     toolbox?: ToolboxComponentOption | ToolboxComponentOption[];
     tooltip?: TooltipComponentOption | TooltipComponentOption[];
     axisPointer?: AxisPointerComponentOption | AxisPointerComponentOption[];
@@ -267,6 +284,7 @@ export interface EChartsOption extends ECBasicOption {
     legend?: LegendComponentOption | (LegendComponentOption)[];
     dataZoom?: DataZoomComponentOption | (DataZoomComponentOption)[];
     visualMap?: VisualMapComponentOption | (VisualMapComponentOption)[];
+    thumbnail?: ThumbnailComponentOption | (ThumbnailComponentOption)[];
     graphic?: GraphicComponentOption | GraphicComponentOption[];
 
     // TODO Generally we support specify a single object on series.

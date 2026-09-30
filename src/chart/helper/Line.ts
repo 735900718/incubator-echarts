@@ -17,21 +17,30 @@
 * under the License.
 */
 
-import { isArray, each } from 'zrender/src/core/util';
+import { isArray, each, retrieve2 } from 'zrender/src/core/util';
 import * as vector from 'zrender/src/core/vector';
 import * as symbolUtil from '../../util/symbol';
 import ECLinePath from './LinePath';
 import * as graphic from '../../util/graphic';
-import { enableHoverEmphasis, enterEmphasis, leaveEmphasis, SPECIAL_STATES } from '../../util/states';
+import { toggleHoverEmphasis, enterEmphasis, leaveEmphasis, SPECIAL_STATES } from '../../util/states';
 import {getLabelStatesModels, setLabelStyle} from '../../label/labelStyle';
 import {round} from '../../util/number';
 import SeriesData from '../../data/SeriesData';
-import { ZRTextAlign, ZRTextVerticalAlign, LineLabelOption, ColorString } from '../../util/types';
+import {
+    ZRTextAlign,
+    ZRTextVerticalAlign,
+    LineLabelOption,
+    ColorString,
+    DefaultEmphasisFocus,
+    BlurScope
+} from '../../util/types';
 import SeriesModel from '../../model/Series';
-import type { LineDrawSeriesScope, LineDrawModelOption } from './LineDraw';
+import type { LineDrawSeriesScope } from './LineDraw';
 import { TextStyleProps } from 'zrender/src/graphic/Text';
 import { LineDataVisual } from '../../visual/commonVisualTypes';
 import Model from '../../model/Model';
+import tokens from '../../visual/tokens';
+import { LineDrawModelOption } from './baseDraw';
 
 const SYMBOL_CATEGORIES = ['fromSymbol', 'toSymbol'] as const;
 
@@ -56,6 +65,22 @@ interface InnerLineLabel extends LineLabel {
 
 function makeSymbolTypeKey(symbolCategory: 'fromSymbol' | 'toSymbol') {
     return '_' + symbolCategory + 'Type' as '_fromSymbolType' | '_toSymbolType';
+}
+function makeSymbolTypeValue(name: 'fromSymbol' | 'toSymbol', lineData: LineList, idx: number) {
+    const symbolType = lineData.getItemVisual(idx, name);
+    if (!symbolType || symbolType === 'none') {
+        return symbolType;
+    }
+    const symbolSize = lineData.getItemVisual(idx, name + 'Size' as 'fromSymbolSize' | 'toSymbolSize');
+    const symbolRotate = lineData.getItemVisual(idx, name + 'Rotate' as 'fromSymbolRotate' | 'toSymbolRotate');
+    const symbolOffset = lineData.getItemVisual(idx, name + 'Offset' as 'fromSymbolOffset' | 'toSymbolOffset');
+    const symbolKeepAspect = lineData.getItemVisual(idx,
+        name + 'KeepAspect' as 'fromSymbolKeepAspect' | 'toSymbolKeepAspect');
+    const symbolSizeArr = symbolUtil.normalizeSymbolSize(symbolSize);
+
+    const symbolOffsetArr = symbolUtil.normalizeSymbolOffset(symbolOffset || 0, symbolSizeArr);
+
+    return symbolType + symbolSizeArr + symbolOffsetArr + (symbolRotate || '') + (symbolKeepAspect || '');
 }
 
 /**
@@ -141,9 +166,11 @@ class Line extends graphic.Group {
     _createLine(lineData: LineList, idx: number, seriesScope?: LineDrawSeriesScope) {
         const seriesModel = lineData.hostModel;
         const linePoints = lineData.getItemLayout(idx);
+        const z2 = lineData.getItemVisual(idx, 'z2');
         const line = createLine(linePoints);
         line.shape.percent = 0;
         graphic.initProps(line, {
+            z2: retrieve2(z2, 0),
             shape: {
                 percent: 1
             }
@@ -157,7 +184,7 @@ class Line extends graphic.Group {
             // it will be updated after line#update.
             // Or symbol position and rotation update in line#beforeUpdate will be one frame slow
             this.add(symbol);
-            this[makeSymbolTypeKey(symbolCategory)] = lineData.getItemVisual(idx, symbolCategory);
+            this[makeSymbolTypeKey(symbolCategory)] = makeSymbolTypeValue(symbolCategory, lineData, idx);
         }, this);
 
         this._updateCommonStl(lineData, idx, seriesScope);
@@ -177,7 +204,7 @@ class Line extends graphic.Group {
         graphic.updateProps(line, target, seriesModel, idx);
 
         each(SYMBOL_CATEGORIES, function (symbolCategory) {
-            const symbolType = (lineData as LineList).getItemVisual(idx, symbolCategory);
+            const symbolType = makeSymbolTypeValue(symbolCategory, lineData as LineList, idx);
             const key = makeSymbolTypeKey(symbolCategory);
             // Symbol changed
             if (this[key] !== symbolType) {
@@ -206,13 +233,21 @@ class Line extends graphic.Group {
 
         let labelStatesModels = seriesScope && seriesScope.labelStatesModels;
 
+        let emphasisDisabled = seriesScope && seriesScope.emphasisDisabled;
+        let focus = (seriesScope && seriesScope.focus) as DefaultEmphasisFocus;
+        let blurScope = (seriesScope && seriesScope.blurScope) as BlurScope;
+
         // Optimization for large dataset
         if (!seriesScope || lineData.hasItemOption) {
             const itemModel = lineData.getItemModel<LineDrawModelOption>(idx);
+            const emphasisModel = itemModel.getModel('emphasis');
 
-            emphasisLineStyle = itemModel.getModel(['emphasis', 'lineStyle']).getLineStyle();
+            emphasisLineStyle = emphasisModel.getModel('lineStyle').getLineStyle();
             blurLineStyle = itemModel.getModel(['blur', 'lineStyle']).getLineStyle();
             selectLineStyle = itemModel.getModel(['select', 'lineStyle']).getLineStyle();
+            emphasisDisabled = emphasisModel.get('disabled');
+            focus = emphasisModel.get('focus');
+            blurScope = emphasisModel.get('blurScope');
 
             labelStatesModels = getLabelStatesModels(itemModel);
         }
@@ -264,12 +299,14 @@ class Line extends graphic.Group {
                     return seriesModel.getFormattedLabel(dataIndex, stateName, lineData.dataType);
                 }
             },
-            inheritColor: visualColor as ColorString || '#000',
+            inheritColor: visualColor as ColorString || tokens.color.neutral99,
             defaultOpacity: lineStyle.opacity,
             defaultText: (rawVal == null
                 ? lineData.getName(idx)
                 : isFinite(rawVal)
-                ? round(rawVal)
+                // PENDING: the `rawVal` is not supposed to be rounded. But this rounding was introduced
+                // in the early stages, so changing it would likely be breaking.
+                ? round(rawVal, 10)
                 : rawVal) + ''
         });
         const label = this.getTextContent() as InnerLineLabel;
@@ -296,7 +333,7 @@ class Line extends graphic.Group {
             inside: false   // Can't be inside for stroke element.
         });
 
-        enableHoverEmphasis(this);
+        toggleHoverEmphasis(this, focus, blurScope, emphasisDisabled);
     }
 
     highlight() {
@@ -308,6 +345,7 @@ class Line extends graphic.Group {
     }
 
     updateLayout(lineData: SeriesData, idx: number) {
+        this.childOfName('line').stopAnimation();
         this.setLinePoints(lineData.getItemLayout(idx));
     }
 

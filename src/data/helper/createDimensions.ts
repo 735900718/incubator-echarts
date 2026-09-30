@@ -34,7 +34,7 @@ import {
 import OrdinalMeta from '../OrdinalMeta';
 import { createSourceFromSeriesDataOption, isSourceInstance, Source } from '../Source';
 import { CtorInt32Array } from '../DataStore';
-import { normalizeToArray } from '../../util/model';
+import { normalizeToArray, removeDuplicates } from '../../util/model';
 import { BE_ORDINAL, guessOrdinal } from './sourceHelper';
 import {
     createDimNameMap, ensureSourceDimNameMap, SeriesDataSchema, shouldOmitUnusedDimensions
@@ -114,7 +114,7 @@ export default function prepareSeriesDataSchema(
     const resultList: SeriesDimensionDefine[] = [];
     const dimCount = getDimCount(source, sysDims, dimsDef, opt.dimensionsCount);
 
-    // Try to ignore unsed dimensions if sharing a high dimension datastore
+    // Try to ignore unused dimensions if sharing a high dimension datastore
     // 30 is an experience value.
     const omitUnusedDimensions = opt.canOmitUnusedDimensions && shouldOmitUnusedDimensions(dimCount);
 
@@ -142,7 +142,7 @@ export default function prepareSeriesDataSchema(
             const userDimName = dimDefItem.name;
             if (userDimName != null && dataDimNameMap.get(userDimName) != null) {
                 // Only if `series.dimensions` is defined in option
-                // displayName, will be set, and dimension will be diplayed vertically in
+                // displayName, will be set, and dimension will be displayed vertically in
                 // tooltip by default.
                 resultItem.name = resultItem.displayName = userDimName;
             }
@@ -188,7 +188,7 @@ export default function prepareSeriesDataSchema(
         });
     });
 
-    // Apply templetes and default order from `sysDims`.
+    // Apply templates and default order from `sysDims`.
     let availDimIdx = 0;
     each(sysDims, function (sysDimItemRaw) {
         let coordDim: DimensionName;
@@ -253,7 +253,11 @@ export default function prepareSeriesDataSchema(
         });
     });
 
-    function applyDim(resultItem: SeriesDimensionDefine, coordDim: DimensionName, coordDimIndex: DimensionIndex) {
+    function applyDim(
+        resultItem: SeriesDimensionDefine,
+        coordDim: SeriesDimensionDefine['coordDim'],
+        coordDimIndex: SeriesDimensionDefine['coordDimIndex']
+    ): void {
         if (VISUAL_DIMENSIONS.get(coordDim as keyof DataVisualDimensions) != null) {
             resultItem.otherDims[coordDim as keyof DataVisualDimensions] = coordDimIndex;
         }
@@ -313,8 +317,8 @@ export default function prepareSeriesDataSchema(
                     //    ]},
                     //    series: {type: 'pie'}
                     // }
-                    // The first colum should better be treated as a "ordinal" although it
-                    // might not able to be detected as an "ordinal" by `guessOrdinal`.
+                    // The first column should better be treated as a "ordinal" although it
+                    // might not be detected as an "ordinal" by `guessOrdinal`.
                     || (resultItem.isExtraCoord
                         && (resultItem.otherDims.itemName != null
                             || resultItem.otherDims.seriesName != null
@@ -336,7 +340,18 @@ export default function prepareSeriesDataSchema(
         resultList.sort((item0, item1) => item0.storeDimIndex - item1.storeDimIndex);
     }
 
-    removeDuplication(resultList);
+    removeDuplicates(
+        resultList,
+        function (item) {
+            return item.name;
+        },
+        function (item, existingCount) {
+            if (existingCount > 0) {
+                // Starts from 0.
+                item.name = item.name + (existingCount - 1);
+            }
+        }
+    );
 
     return new SeriesDataSchema({
         source,
@@ -346,21 +361,6 @@ export default function prepareSeriesDataSchema(
     });
 }
 
-function removeDuplication(result: SeriesDimensionDefine[]) {
-    const duplicationMap = createHashMap<number>();
-    for (let i = 0; i < result.length; i++) {
-        const dim = result[i];
-        const dimOriginalName = dim.name;
-        let count = duplicationMap.get(dimOriginalName) || 0;
-        if (count > 0) {
-            // Starts from 0.
-            dim.name = dimOriginalName + (count - 1);
-        }
-        count++;
-        duplicationMap.set(dimOriginalName, count);
-    }
-}
-
 // ??? TODO
 // Originally detect dimCount by data[0]. Should we
 // optimize it to only by sysDims and dimensions and encode.
@@ -368,7 +368,7 @@ function removeDuplication(result: SeriesDimensionDefine[]) {
 // But
 // (1) custom series should be considered. where other dims
 // may be visited.
-// (2) sometimes user need to calcualte bubble size or use visualMap
+// (2) sometimes user need to calculate bubble size or use visualMap
 // on other dimensions besides coordSys needed.
 // So, dims that is not used by system, should be shared in data store?
 function getDimCount(
@@ -399,10 +399,9 @@ function genCoordDimName(
     map: HashMap<unknown, DimensionName>,
     fromZero: boolean
 ) {
-    const mapData = map.data;
-    if (fromZero || mapData.hasOwnProperty(name)) {
+    if (fromZero || map.hasKey(name)) {
         let i = 0;
-        while (mapData.hasOwnProperty(name + i)) {
+        while (map.hasKey(name + i)) {
             i++;
         }
         name += i;

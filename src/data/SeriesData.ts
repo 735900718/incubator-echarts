@@ -27,7 +27,7 @@ import DataDiffer from './DataDiffer';
 import {DataProvider, DefaultDataProvider} from './helper/dataProvider';
 import {summarizeDimensions, DimensionSummary} from './helper/dimensionHelper';
 import SeriesDimensionDefine from './SeriesDimensionDefine';
-import {ArrayLike, Dictionary, FunctionPropertyNames} from 'zrender/src/core/types';
+import {ArrayLike, Dictionary, FunctionPropertyNames, NullUndefined} from 'zrender/src/core/types';
 import Element from 'zrender/src/Element';
 import {
     DimensionIndex, DimensionName, DimensionLoose, OptionDataItem,
@@ -46,6 +46,7 @@ import {isSourceInstance, Source} from './Source';
 import { LineStyleProps } from '../model/mixin/lineStyle';
 import DataStore, { DataStoreDimensionDefine, DimValueGetter } from './DataStore';
 import { isSeriesDataSchema, SeriesDataSchema } from './helper/SeriesDataSchema';
+import { DataSanitizationFilter } from './helper/dataValueHelper';
 
 const isObject = zrUtil.isObject;
 const map = zrUtil.map;
@@ -53,7 +54,7 @@ const map = zrUtil.map;
 const CtorInt32Array = typeof Int32Array === 'undefined' ? Array : Int32Array;
 
 // Use prefix to avoid index to be the same as otherIdList[idx],
-// which will cause weird udpate animation.
+// which will cause weird update animation.
 const ID_PREFIX = 'e\0\0';
 
 const INDEX_NOT_FOUND = -1;
@@ -113,7 +114,7 @@ export interface DefaultDataVisual {
     symbolRotate?: number
     symbolKeepAspect?: boolean
     symbolOffset?: string | number | (string | number)[]
-
+    z2: number
     liftZ?: number
     // For legend.
     legendIcon?: string
@@ -159,12 +160,12 @@ class SeriesData<
      * Name of dimensions list of SeriesData.
      *
      * @caution Carefully use the index of this array.
-     * Becuase when DataStore is an extra high dimension(>30) dataset. We will only pick
+     * Because when DataStore is an extra high dimension(>30) dataset. We will only pick
      * the used dimensions from DataStore to avoid performance issue.
      */
     readonly dimensions: SeriesDimensionName[];
 
-    // Infomation of each data dimension, like data type.
+    // Information of each data dimension, like data type.
     private _dimInfos: Record<SeriesDimensionName, SeriesDimensionDefine>;
 
     private _dimOmitted = false;
@@ -192,7 +193,7 @@ class SeriesData<
 
     /**
      * @readonly
-     * Host tree if List is used to store tree ndoes.
+     * Host tree if List is used to store tree nodes.
      */
     tree?: Tree;
 
@@ -208,7 +209,7 @@ class SeriesData<
     // Global visual properties after visual coding
     private _visual: Dictionary<any> = {};
 
-    // Globel layout properties.
+    // Global layout properties.
     private _layout: Dictionary<any> = {};
 
     // Item visual properties after visual coding
@@ -217,7 +218,7 @@ class SeriesData<
     // Item layout properties after layout
     private _itemLayouts: any[] = [];
 
-    // Graphic elemnents
+    // Graphic elements
     private _graphicEls: Element[] = [];
 
     // key: dim, value: extent
@@ -254,10 +255,10 @@ class SeriesData<
 
     // Methods that create a new list based on this list should be listed here.
     // Notice that those method should `RETURN` the new list.
-    TRANSFERABLE_METHODS = ['cloneShallow', 'downSample', 'lttbDownSample', 'map'] as const;
+    TRANSFERABLE_METHODS = ['cloneShallow', 'downSample', 'minmaxDownSample', 'lttbDownSample', 'map'] as const;
     // Methods that change indices of this list should be listed here.
     CHANGABLE_METHODS = ['filterSelf', 'selectRange'] as const;
-    DOWNSAMPLE_METHODS = ['downSample', 'lttbDownSample'] as const;
+    DOWNSAMPLE_METHODS = ['downSample', 'minmaxDownSample', 'lttbDownSample'] as const;
 
     /**
      * @param dimensionsInput.dimensions
@@ -316,18 +317,19 @@ class SeriesData<
             if (dimensionInfo.createInvertedIndices) {
                 invertedIndicesMap[dimensionName] = [];
             }
-            if (otherDims.itemName === 0) {
-                this._nameDimIdx = i;
-            }
-            if (otherDims.itemId === 0) {
-                this._idDimIdx = i;
-            }
 
             if (__DEV__) {
                 zrUtil.assert(assignStoreDimIdx || dimensionInfo.storeDimIndex >= 0);
             }
             if (assignStoreDimIdx) {
                 dimensionInfo.storeDimIndex = i;
+            }
+
+            if (otherDims.itemName === 0) {
+                this._nameDimIdx = dimensionInfo.storeDimIndex;
+            }
+            if (otherDims.itemId === 0) {
+                this._idDimIdx = dimensionInfo.storeDimIndex;
             }
         }
 
@@ -357,7 +359,7 @@ class SeriesData<
      * Because only those dimensions will have auto-generated dimension names if not
      * have a user-specified name, and other dimensions will get a return of null/undefined.
      *
-     * @notice Becuause of this reason, should better use `getDimensionIndex` instead, for examples:
+     * @notice Because of this reason, should better use `getDimensionIndex` instead, for examples:
      * ```js
      * const val = data.getStore().get(data.getDimensionIndex(dim), dataIdx);
      * ```
@@ -375,7 +377,7 @@ class SeriesData<
             return this.dimensions[dimIdx];
         }
 
-        // Retrieve from series dimension definition becuase it probably contains
+        // Retrieve from series dimension definition because it probably contains
         // generated dimension name (like 'x', 'y').
         const dimName = this._dimIdxToName.get(dimIdx);
         if (dimName != null) {
@@ -419,7 +421,7 @@ class SeriesData<
      *     + If there is the same concrete dim name defined in `series.dimensions` or `dataset.dimensions`,
      *        it means that concrete name.
      *     + If not, it will be converted to a number, which means the index of the dimension.
-     *        (why? because of the backward compatbility. We have been tolerating number-like string in
+     *        (why? because of the backward compatibility. We have been tolerating number-like string in
      *        dimension setting, although now it seems that it is not a good idea.)
      *     For example, `visualMap[i].dimension: "1"` is the same meaning as `visualMap[i].dimension: 1`,
      *     if no dimension name is defined as `"1"`.
@@ -427,10 +429,10 @@ class SeriesData<
      *   For example, it can be be default name `"x"`, `"y"`, `"z"`, `"lng"`, `"lat"`, `"angle"`, `"radius"`,
      *   or customized in `dimensions` property of option like `"age"`.
      *
-     * @return recogonized `DimensionIndex`. Otherwise return null/undefined (means that dim is `DimensionName`).
+     * @return recognized `DimensionIndex`. Otherwise return null/undefined (means that dim is `DimensionName`).
      */
     private _recognizeDimIndex(dim: DimensionLoose): DimensionIndex {
-        if (typeof dim === 'number'
+        if (zrUtil.isNumber(dim)
             // If being a number-like string but not being defined as a dimension name.
             || (
                 dim != null
@@ -447,7 +449,7 @@ class SeriesData<
         const dimIdx = this.getDimensionIndex(dim);
         if (__DEV__) {
             if (dimIdx == null) {
-                throw new Error('Unkown dimension ' + dim);
+                throw new Error('Unknown dimension ' + dim);
             }
         }
         return dimIdx;
@@ -580,10 +582,10 @@ class SeriesData<
      *            [NaN, 43, 1],
      *            ['-', 'asdf', 0]
      *        ]
-     *        Each item is exaclty cooresponding to a dimension.
+     *        Each item is exactly corresponding to a dimension.
      */
     appendValues(values: any[][], names?: string[]): void {
-        const {start, end} = this._store.appendValues(values, names.length);
+        const {start, end} = this._store.appendValues(values, names && names.length);
         const shouldMakeIdFromName = this._shouldMakeIdFromName();
 
         this._updateOrdinalMeta();
@@ -671,26 +673,24 @@ class SeriesData<
     }
 
     /**
-     * PENDING: In fact currently this function is only used to short-circuit
-     * the calling of `scale.unionExtentFromData` when data have been filtered by modules
-     * like "dataZoom". `scale.unionExtentFromData` is used to calculate data extent for series on
-     * an axis, but if a "axis related data filter module" is used, the extent of the axis have
-     * been fixed and no need to calling `scale.unionExtentFromData` actually.
-     * But if we add "custom data filter" in future, which is not "axis related", this method may
-     * be still needed.
-     *
      * Optimize for the scenario that data is filtered by a given extent.
      * Consider that if data amount is more than hundreds of thousand,
      * extent calculation will cost more than 10ms and the cache will
      * be erased because of the filtering.
      */
-    getApproximateExtent(dim: SeriesDimensionLoose): [number, number] {
-        return this._approximateExtent[dim] || this._store.getDataExtent(this._getStoreDimIndex(dim));
+    getApproximateExtent(
+        dim: SeriesDimensionLoose,
+        filter: DataSanitizationFilter | NullUndefined
+    ): [number, number] {
+        return this._approximateExtent[dim] || this._store.getDataExtent(this._getStoreDimIndex(dim), filter);
     }
 
     /**
+     * NOTICE: `_approximateExtent` does not support filter. Callers must ensure the input extent
+     * to be handled by `scale.sanitizeExtent`.
+     *
      * Calculate extent on a filtered data might be time consuming.
-     * Approximate extent is only used for: calculte extent of filtered data outside.
+     * Approximate extent is only used for: calculate extent of filtered data outside.
      */
     setApproximateExtent(extent: [number, number], dim: SeriesDimensionLoose): void {
         dim = this.getDimension(dim);
@@ -723,7 +723,7 @@ class SeriesData<
     }
 
     /**
-     * @return Never be null/undefined. `number` will be converted to string. Becuase:
+     * @return Never be null/undefined. `number` will be converted to string. Because:
      * In most cases, name is used in display, where returning a string is more convenient.
      * In other cases, name is used in query (see `indexOfName`), where we can keep the
      * rule that name `2` equals to name `'2'`.
@@ -750,7 +750,7 @@ class SeriesData<
     }
 
     /**
-     * @return Never null/undefined. `number` will be converted to string. Becuase:
+     * @return Never null/undefined. `number` will be converted to string. Because:
      * In all cases having encountered at present, id is used in making diff comparison, which
      * are usually based on hash map. We can keep the rule that the internal id are always string
      * (treat `2` is the same as `'2'`) to make the related logic simple.
@@ -792,7 +792,7 @@ class SeriesData<
     }
 
     getDataExtent(dim: DimensionLoose): [number, number] {
-        return this._store.getDataExtent(this._getStoreDimIndex(dim));
+        return this._store.getDataExtent(this._getStoreDimIndex(dim), null);
     }
 
     getSum(dim: DimensionLoose): number {
@@ -816,7 +816,7 @@ class SeriesData<
     }
 
     /**
-     * If value is NaN. Inlcuding '-'
+     * If value is NaN. Including '-'
      * Only check the coord dimensions.
      */
     hasValue(idx: number): boolean {
@@ -833,7 +833,7 @@ class SeriesData<
     }
 
     /**
-     * Retreive the index with given name
+     * Retrieve the index with given name
      */
     indexOfName(name: string): number {
         for (let i = 0, len = this._store.count(); i < len; i++) {
@@ -866,7 +866,7 @@ class SeriesData<
                 throw new Error('Do not supported yet');
             }
         }
-        const rawIndex = invertedIndices[value];
+        const rawIndex = invertedIndices && invertedIndices[value];
         if (rawIndex == null || isNaN(rawIndex)) {
             return INDEX_NOT_FOUND;
         }
@@ -874,25 +874,13 @@ class SeriesData<
     }
 
     /**
-     * Retreive the index of nearest value
-     * @param dim
-     * @param value
-     * @param [maxDistance=Infinity]
-     * @return If and only if multiple indices has
-     *         the same value, they are put to the result.
-     */
-    indicesOfNearest(dim: DimensionLoose, value: number, maxDistance?: number): number[] {
-        return this._store.indicesOfNearest(
-            this._getStoreDimIndex(dim),
-            value, maxDistance
-        );
-    }
-    /**
      * Data iteration
      * @param ctx default this
      * @example
      *  list.each('x', function (x, idx) {});
      *  list.each(['x', 'y'], function (x, y, idx) {});
+     *  list.each(0, function (x, idx) {});
+     *  list.each([0, 1], function (x, y, idx) {});
      *  list.each(function (idx) {})
      */
     each<Ctx>(cb: EachCb0<Ctx>, ctx?: Ctx, ctxCompat?: Ctx): void;
@@ -907,7 +895,7 @@ class SeriesData<
     ): void {
         'use strict';
 
-        if (typeof dims === 'function') {
+        if (zrUtil.isFunction(dims)) {
             ctx = cb as Ctx;
             cb = dims;
             dims = [];
@@ -938,7 +926,7 @@ class SeriesData<
     ): SeriesData {
         'use strict';
 
-        if (typeof dims === 'function') {
+        if (zrUtil.isFunction(dims)) {
             ctx = cb as Ctx;
             cb = dims;
             dims = [];
@@ -994,7 +982,7 @@ class SeriesData<
     ): unknown[] {
         'use strict';
 
-        if (typeof dims === 'function') {
+        if (zrUtil.isFunction(dims)) {
             ctx = cb as Ctx;
             cb = dims;
             dims = [];
@@ -1069,8 +1057,8 @@ class SeriesData<
         );
 
         // If do shallow clone here, if there are too many stacked series,
-        // it still cost lots of memory, becuase `_store.dimensions` are not shared.
-        // We should consider there probably be shallow clone happen in each sereis
+        // it still cost lots of memory, because `_store.dimensions` are not shared.
+        // We should consider there probably be shallow clone happen in each series
         // in consequent filter/map.
         this._store.modify(
             dimIndices,
@@ -1094,6 +1082,23 @@ class SeriesData<
             rate,
             sampleValue,
             sampleIndex
+        );
+        return list as SeriesData<HostModel>;
+    }
+
+    /**
+     * Large data down sampling using min-max
+     * @param {string} valueDimension
+     * @param {number} rate
+     */
+    minmaxDownSample(
+        valueDimension: DimensionLoose,
+        rate: number
+    ): SeriesData<HostModel> {
+        const list = cloneListForMapAndSample(this);
+        list._store = this._store.minmaxDownSample(
+            this._getStoreDimIndex(valueDimension),
+            rate
         );
         return list as SeriesData<HostModel>;
     }
@@ -1124,7 +1129,7 @@ class SeriesData<
      */
     // TODO: Type of data item
     getItemModel<ItemOpts extends unknown = unknown>(idx: number): Model<ItemOpts
-        // Extract item option with value key. FIXME will cause incompatitable issue
+        // Extract item option with value key. FIXME will cause incompatible issue
         // Extract<HostModel['option']['data'][number], { value?: any }>
     > {
         const hostModel = this.hostModel;
@@ -1269,15 +1274,9 @@ class SeriesData<
     setLayout(key: string, val: any): void;
     setLayout(kvObj: Dictionary<any>): void;
     setLayout(key: string | Dictionary<any>, val?: any): void {
-        if (isObject(key)) {
-            for (const name in key) {
-                if (key.hasOwnProperty(name)) {
-                    this.setLayout(name, key[name]);
-                }
-            }
-            return;
-        }
-        this._layout[key] = val;
+        isObject(key)
+            ? zrUtil.extend(this._layout, key)
+            : (this._layout[key] = val);
     }
 
     /**
@@ -1368,7 +1367,7 @@ class SeriesData<
         injectFunction: (...args: any) => any
     ): void {
         const originalMethod = this[methodName];
-        if (typeof originalMethod !== 'function') {
+        if (!zrUtil.isFunction(originalMethod)) {
             return;
         }
         this.__wrappedMethods = this.__wrappedMethods || [];
@@ -1439,7 +1438,7 @@ class SeriesData<
         };
 
         /**
-         * Data in excludeDimensions is copied, otherwise transfered.
+         * Data in excludeDimensions is copied, otherwise transferred.
          */
         cloneListForMapAndSample = function (original: SeriesData): SeriesData {
             const list = new SeriesData(

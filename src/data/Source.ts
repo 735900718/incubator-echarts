@@ -271,7 +271,7 @@ export function detectSourceFormat(data: DatasetOption['source']): SourceFormat 
             if (item == null) {
                 continue;
             }
-            else if (isArray(item)) {
+            else if (isArray(item) || isTypedArray(item)) {
                 sourceFormat = SOURCE_FORMAT_ARRAY_ROWS;
                 break;
             }
@@ -319,7 +319,7 @@ function determineSourceDimensions(
     let dimensionsDetectedCount;
     let startIndex: number;
 
-    // PEDING: could data be null/undefined here?
+    // PENDING: Could data be null/undefined here?
     // currently, if `dataset.source` not specified, error thrown.
     // if `series.data` not specified, nothing rendered without error thrown.
     // Should test these cases.
@@ -401,21 +401,28 @@ function determineSourceDimensions(
 }
 
 function objectRowsCollectDimensions(data: OptionSourceDataObjectRows): DimensionDefinitionLoose[] {
-    let firstIndex = 0;
-    let obj;
-    while (firstIndex < data.length && !(obj = data[firstIndex++])) {} // jshint ignore: line
-    if (obj) {
-        const dimensions: DimensionDefinitionLoose[] = [];
-        each(obj, function (value, key) {
-            dimensions.push(key);
-        });
-        return dimensions;
+    const dimensionNameMap = createHashMap<true, DimensionName>();
+    const dimensionsDefine: DimensionDefinitionLoose[] = [];
+
+    for (let i = 0; i < data.length; i++) {
+        const obj = data[i];
+        if (!obj) {
+            continue;
+        }
+        for (const name in obj) {
+            if (hasOwn(obj, name) && !dimensionNameMap.get(name)) {
+                dimensionNameMap.set(name, true);
+                dimensionsDefine.push(name);
+            }
+        }
     }
+
+    return dimensionsDefine.length ? dimensionsDefine : void 0;
 }
 
 // Consider dimensions defined like ['A', 'price', 'B', 'price', 'C', 'price'],
 // which is reasonable. But dimension name is duplicated.
-// Returns undefined or an array contains only object without null/undefiend or string.
+// Returns undefined or an array contains only object without null/undefined or string.
 function normalizeDimensionsOption(dimensionsDefine: DimensionDefinitionLoose[]): DimensionDefinition[] {
     if (!dimensionsDefine) {
         // The meaning of null/undefined is different from empty array.
@@ -432,8 +439,8 @@ function normalizeDimensionsOption(dimensionsDefine: DimensionDefinitionLoose[])
         };
 
         // User can set null in dimensions.
-        // We dont auto specify name, othewise a given name may
-        // cause it be refered unexpectedly.
+        // We don't auto specify name, otherwise a given name may
+        // cause it to be referred unexpectedly.
         if (item.name == null) {
             return item;
         }

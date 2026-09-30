@@ -25,6 +25,7 @@ import GlobalModel from '../../model/Global';
 interface MarkAreaStateOption {
     itemStyle?: ItemStyleOption
     label?: SeriesLabelOption
+    z2?: number
 }
 
 interface MarkAreaDataItemOptionBase extends MarkAreaStateOption,
@@ -79,7 +80,7 @@ class MarkAreaModel extends MarkerModel<MarkAreaOption> {
     }
 
     static defaultOption: MarkAreaOption = {
-        zlevel: 0,
+        // zlevel: 0,
         // PENDING
         z: 1,
         tooltip: {

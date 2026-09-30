@@ -21,7 +21,7 @@
 // ??? refactor? check the outer usage of data provider.
 // merge with defaultDimValueGetter?
 
-import {isTypedArray, extend, assert, each, isObject, bind} from 'zrender/src/core/util';
+import {isTypedArray, extend, assert, each, isObject, bind, isArray} from 'zrender/src/core/util';
 import {getDataItemValue} from '../../util/model';
 import { createSourceFromSeriesDataOption, Source, isSourceInstance } from '../Source';
 import {ArrayLike, Dictionary} from 'zrender/src/core/types';
@@ -37,6 +37,7 @@ import {
     OptionDataItem, OptionDataValue, SourceFormat, SeriesLayoutBy, ParsedValue, DimensionLoose, NullUndefined
 } from '../../util/types';
 import SeriesData from '../SeriesData';
+import { error } from '../../util/log';
 
 export interface DataProvider {
     /**
@@ -112,9 +113,11 @@ export class DefaultDataProvider implements DataProvider {
         // declare source is Source;
         this._source = source;
         const data = this._data = source.data;
+        const sourceFormat = source.sourceFormat;
+        const seriesLayoutBy = source.seriesLayoutBy;
 
         // Typed array. TODO IE10+?
-        if (source.sourceFormat === SOURCE_FORMAT_TYPED_ARRAY) {
+        if (sourceFormat === SOURCE_FORMAT_TYPED_ARRAY) {
             if (__DEV__) {
                 if (dimSize == null) {
                     throw new Error('Typed array data must specify dimension size');
@@ -123,6 +126,11 @@ export class DefaultDataProvider implements DataProvider {
             this._offset = 0;
             this._dimSize = dimSize;
             this._data = data;
+        }
+
+        if (__DEV__) {
+            const validator = rawSourceDataValidatorMap[getMethodMapKey(sourceFormat, seriesLayoutBy)];
+            validator && validator(data, source.dimensionsDefine);
         }
 
         mountMethods(this, data, source);
@@ -286,6 +294,39 @@ export class DefaultDataProvider implements DataProvider {
 }
 
 
+type RawSourceDataValidator = (
+    rawData: OptionSourceData,
+    dimsDef: { name?: DimensionName }[],
+) => void;
+
+const validateSimply: RawSourceDataValidator = function (
+    rawData
+) {
+    if (!isArray(rawData)) {
+        error('series.data or dataset.source must be an array.');
+    }
+};
+
+/**
+ * Only run in dev mode - hint users for debug.
+ */
+const rawSourceDataValidatorMap: Dictionary<RawSourceDataValidator> = {
+    [SOURCE_FORMAT_ARRAY_ROWS + '_' + SERIES_LAYOUT_BY_COLUMN]: validateSimply,
+    [SOURCE_FORMAT_ARRAY_ROWS + '_' + SERIES_LAYOUT_BY_ROW]: validateSimply,
+    [SOURCE_FORMAT_OBJECT_ROWS]: validateSimply,
+    [SOURCE_FORMAT_KEYED_COLUMNS]: function (
+        rawData, dimsDef
+    ) {
+        for (let i = 0; i < dimsDef.length; i++) {
+            const dimName = dimsDef[i].name;
+            if (dimName == null) {
+                error('dimension name must not be null/undefined.');
+            }
+        }
+    },
+    [SOURCE_FORMAT_ORIGINAL]: validateSimply
+};
+
 
 type RawSourceItemGetter = (
     rawData: OptionSourceData,
@@ -328,12 +369,7 @@ const rawSourceItemGetterMap: Dictionary<RawSourceItemGetter> = {
         const item = out || [];
         for (let i = 0; i < dimsDef.length; i++) {
             const dimName = dimsDef[i].name;
-            if (__DEV__) {
-                if (dimName == null) {
-                    throw new Error();
-                }
-            }
-            const col = (rawData as Dictionary<OptionDataValue[]>)[dimName];
+            const col = dimName != null ? (rawData as Dictionary<OptionDataValue[]>)[dimName] : null;
             item[i] = col ? col[idx] : null;
         }
         return item;
@@ -383,12 +419,7 @@ const rawSourceDataCounterMap: Dictionary<RawSourceDataCounter> = {
         rawData, startIndex, dimsDef
     ) {
         const dimName = dimsDef[0].name;
-        if (__DEV__) {
-            if (dimName == null) {
-                throw new Error();
-            }
-        }
-        const col = (rawData as Dictionary<OptionDataValue[]>)[dimName];
+        const col = dimName != null ? (rawData as Dictionary<OptionDataValue[]>)[dimName] : null;
         return col ? col.length : 0;
     },
     [SOURCE_FORMAT_ORIGINAL]: countSimply
@@ -399,7 +430,7 @@ export function getRawSourceDataCounter(
 ): RawSourceDataCounter {
     const method = rawSourceDataCounterMap[getMethodMapKey(sourceFormat, seriesLayoutBy)];
     if (__DEV__) {
-        assert(method, 'Do not suppport count on "' + sourceFormat + '", "' + seriesLayoutBy + '".');
+        assert(method, 'Do not support count on "' + sourceFormat + '", "' + seriesLayoutBy + '".');
     }
     return method;
 }
@@ -446,7 +477,7 @@ const rawSourceValueGetterMap: Partial<Record<SourceFormat, RawSourceValueGetter
 export function getRawSourceValueGetter(sourceFormat: SourceFormat): RawSourceValueGetter {
     const method = rawSourceValueGetterMap[sourceFormat];
     if (__DEV__) {
-        assert(method, 'Do not suppport get value on "' + sourceFormat + '".');
+        assert(method, 'Do not support get value on "' + sourceFormat + '".');
     }
     return method;
 }

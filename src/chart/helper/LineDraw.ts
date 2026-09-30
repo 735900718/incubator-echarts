@@ -22,19 +22,17 @@ import LineGroup from './Line';
 import SeriesData from '../../data/SeriesData';
 import {
     StageHandlerProgressParams,
-    LineStyleOption,
-    LineLabelOption,
-    ColorString,
-    AnimationOptionMixin,
     ZRStyleProps,
-    StatesOptionMixin,
     DisplayState,
     LabelOption,
-    StatesMixinBase
+    DefaultEmphasisFocus,
+    BlurScope
 } from '../../util/types';
 import Displayable from 'zrender/src/graphic/Displayable';
 import Model from '../../model/Model';
 import { getLabelStatesModels } from '../../label/labelStyle';
+import Element from 'zrender/src/Element';
+import { ILineDraw, ListForLineDraw } from './baseDraw';
 
 interface LineLike extends graphic.Group {
     updateData(data: SeriesData, idx: number, scope?: LineDrawSeriesScope): void
@@ -46,40 +44,6 @@ interface LineLikeCtor {
     new(data: SeriesData, idx: number, scope?: LineDrawSeriesScope): LineLike
 }
 
-interface LineDrawStateOption {
-    lineStyle?: LineStyleOption
-    label?: LineLabelOption
-}
-
-export interface LineDrawModelOption extends LineDrawStateOption,
-    StatesOptionMixin<LineDrawStateOption, StatesMixinBase> {
-    // If has effect
-    effect?: {
-        show?: boolean
-        period?: number
-        delay?: number | ((idx: number) => number)
-        /**
-         * If move with constant speed px/sec
-         * period will be ignored if this property is > 0,
-         */
-        constantSpeed?: number
-
-        symbol?: string
-        symbolSize?: number | number[]
-        loop?: boolean
-        /**
-         * Length of trail, 0 - 1
-         */
-        trailLength?: number
-        /**
-         * Default to be same with lineStyle.color
-         */
-        color?: ColorString
-    }
-}
-
-type ListForLineDraw = SeriesData<Model<LineDrawModelOption & AnimationOptionMixin>>;
-
 export interface LineDrawSeriesScope {
     lineStyle?: ZRStyleProps
     emphasisLineStyle?: ZRStyleProps
@@ -87,9 +51,13 @@ export interface LineDrawSeriesScope {
     selectLineStyle?: ZRStyleProps
 
     labelStatesModels: Record<DisplayState, Model<LabelOption>>
+
+    focus?: DefaultEmphasisFocus
+    blurScope?: BlurScope
+    emphasisDisabled?: boolean;
 }
 
-class LineDraw {
+class LineDraw implements ILineDraw {
     group = new graphic.Group();
 
     private _LineCtor: LineLikeCtor;
@@ -98,15 +66,16 @@ class LineDraw {
 
     private _seriesScope: LineDrawSeriesScope;
 
+    private _progressiveEls: LineLike[];
+
     constructor(LineCtor?: LineLikeCtor) {
         this._LineCtor = LineCtor || LineGroup;
     }
 
-    isPersistent() {
-        return true;
-    };
-
     updateData(lineData: ListForLineDraw) {
+        // Remove progressive els.
+        this._progressiveEls = null;
+
         const lineDraw = this;
         const group = lineDraw.group;
 
@@ -153,11 +122,18 @@ class LineDraw {
         this.group.removeAll();
     };
 
-    incrementalUpdate(taskParams: StageHandlerProgressParams, lineData: ListForLineDraw) {
+    incrementalUpdate(
+        taskParams: StageHandlerProgressParams,
+        lineData: ListForLineDraw,
+        incrementalId: Displayable['incremental']
+    ) {
+
+        this._progressiveEls = [];
+
         function updateIncrementalAndHover(el: Displayable) {
             if (!el.isGroup && !isEffectObject(el)) {
-                el.incremental = true;
-                el.ensureState('emphasis').hoverLayer = true;
+                el.incremental = incrementalId;
+                el.ensureState('emphasis').hoverLayer = graphic.HOVER_LAYER_FOR_INCREMENTAL;
             }
         }
 
@@ -170,6 +146,8 @@ class LineDraw {
 
                 this.group.add(el);
                 lineData.setItemGraphicEl(idx, el);
+
+                this._progressiveEls.push(el);
             }
         }
     };
@@ -177,6 +155,10 @@ class LineDraw {
     remove() {
         this.group.removeAll();
     };
+
+    eachRendered(cb: (el: Element) => boolean | void) {
+        graphic.traverseElements(this._progressiveEls || this.group, cb);
+    }
 
     private _doAdd(
         lineData: ListForLineDraw,
@@ -226,11 +208,16 @@ function isEffectObject(el: Displayable) {
 
 function makeSeriesScope(lineData: ListForLineDraw): LineDrawSeriesScope {
     const hostModel = lineData.hostModel;
+    const emphasisModel = hostModel.getModel('emphasis');
     return {
         lineStyle: hostModel.getModel('lineStyle').getLineStyle(),
-        emphasisLineStyle: hostModel.getModel(['emphasis', 'lineStyle']).getLineStyle(),
+        emphasisLineStyle: emphasisModel.getModel(['lineStyle']).getLineStyle(),
         blurLineStyle: hostModel.getModel(['blur', 'lineStyle']).getLineStyle(),
         selectLineStyle: hostModel.getModel(['select', 'lineStyle']).getLineStyle(),
+
+        emphasisDisabled: emphasisModel.get('disabled'),
+        blurScope: emphasisModel.get('blurScope'),
+        focus: emphasisModel.get('focus'),
 
         labelStatesModels: getLabelStatesModels(hostModel)
     };
@@ -241,7 +228,7 @@ function isPointNaN(pt: number[]) {
 }
 
 function lineNeedsDraw(pts: number[][]) {
-    return !isPointNaN(pts[0]) && !isPointNaN(pts[1]);
+    return pts && !isPointNaN(pts[0]) && !isPointNaN(pts[1]);
 }
 
 

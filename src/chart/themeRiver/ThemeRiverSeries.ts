@@ -35,7 +35,7 @@ import {
     Dictionary,
     SeriesLabelOption,
     CallbackDataParams,
-    DefaultStatesMixinEmpasis
+    DefaultStatesMixinEmphasis
 } from '../../util/types';
 import SingleAxis from '../../coord/single/SingleAxis';
 import GlobalModel from '../../model/Global';
@@ -51,7 +51,7 @@ interface ThemeRiverSeriesLabelOption extends SeriesLabelOption {
 type ThemerRiverDataItem = [OptionDataValueDate, OptionDataValueNumeric, string];
 
 interface ThemeRiverStatesMixin {
-    emphasis?: DefaultStatesMixinEmpasis
+    emphasis?: DefaultStatesMixinEmphasis
 }
 export interface ThemeRiverStateOption<TCbParams = never> {
     label?: ThemeRiverSeriesLabelOption
@@ -78,8 +78,10 @@ export interface ThemeRiverSeriesOption
     data?: ThemerRiverDataItem[]
 }
 
+export const SERIES_TYPE_THEME_RIVER = 'themeRiver';
+
 class ThemeRiverSeriesModel extends SeriesModel<ThemeRiverSeriesOption> {
-    static readonly type = 'series.themeRiver';
+    static readonly type = 'series.' + SERIES_TYPE_THEME_RIVER;
     readonly type = ThemeRiverSeriesModel.type;
 
     static readonly dependencies = ['singleAxis'];
@@ -156,7 +158,7 @@ class ThemeRiverSeriesModel extends SeriesModel<ThemeRiverSeriesOption> {
 
     /**
      * @override
-     * @param  option  the initial option that user gived
+     * @param  option  the initial option that user gave
      * @param  ecModel  the model object for themeRiver option
      */
     getInitialData(option: ThemeRiverSeriesOption, ecModel: GlobalModel): SeriesData {
@@ -295,7 +297,7 @@ class ThemeRiverSeriesModel extends SeriesModel<ThemeRiverSeriesOption> {
     }
 
     static defaultOption: ThemeRiverSeriesOption = {
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
 
         colorBy: 'data',

@@ -23,6 +23,7 @@ import SeriesModel from '../model/Series';
 import { SeriesOption, SeriesStackOptionMixin } from '../util/types';
 import SeriesData, { DataCalculationInfo } from '../data/SeriesData';
 import { addSafe } from '../util/number';
+import { createSimpleOverallStageHandler2 } from '../util/model';
 
 type StackInfo = Pick<
     DataCalculationInfo<SeriesOption & SeriesStackOptionMixin>,
@@ -36,16 +37,18 @@ type StackInfo = Pick<
     seriesModel: SeriesModel<SeriesOption & SeriesStackOptionMixin>
 };
 
+export const dataStackStageHandler = createSimpleOverallStageHandler2(dataStack);
+
 // (1) [Caution]: the logic is correct based on the premises:
 //     data processing stage is blocked in stream.
 //     See <module:echarts/stream/Scheduler#performDataProcessorTasks>
-// (2) Only register once when import repeatly.
-//     Should be executed after series filtered and before stack calculation.
-export default function dataStack(ecModel: GlobalModel) {
+// (2) Only register once when import repeatedly.
+//     Should be executed after series is filtered and before stack calculation.
+function dataStack(ecModel: GlobalModel) {
     const stackInfoMap = createHashMap<StackInfo[]>();
     ecModel.eachSeries(function (seriesModel: SeriesModel<SeriesOption & SeriesStackOptionMixin>) {
         const stack = seriesModel.get('stack');
-        // Compatibal: when `stack` is set as '', do not stack.
+        // Compatible: when `stack` is set as '', do not stack.
         if (stack) {
             const stackInfoList = stackInfoMap.get(stack) || stackInfoMap.set(stack, []);
             const data = seriesModel.getData();
@@ -69,15 +72,34 @@ export default function dataStack(ecModel: GlobalModel) {
                 return;
             }
 
-            stackInfoList.length && data.setCalculationInfo(
-                'stackedOnSeries', stackInfoList[stackInfoList.length - 1].seriesModel
-            );
-
             stackInfoList.push(stackInfo);
         }
     });
 
-    stackInfoMap.each(calculateStack);
+    // Process each stack group
+    stackInfoMap.each(function (stackInfoList) {
+        if (stackInfoList.length === 0) {
+            return;
+        }
+        // Check if stack order needs to be reversed
+        const firstSeries = stackInfoList[0].seriesModel;
+        const stackOrder = firstSeries.get('stackOrder') || 'seriesAsc';
+
+        if (stackOrder === 'seriesDesc') {
+            stackInfoList.reverse();
+        }
+
+        // Set stackedOnSeries for each series in the final order
+        each(stackInfoList, function (stackInfo, index) {
+            stackInfo.data.setCalculationInfo(
+                'stackedOnSeries',
+                index > 0 ? stackInfoList[index - 1].seriesModel : null
+            );
+        });
+
+        // Calculate stack values
+        calculateStack(stackInfoList);
+    });
 }
 
 function calculateStack(stackInfoList: StackInfo[]) {
@@ -87,6 +109,7 @@ function calculateStack(stackInfoList: StackInfo[]) {
         const dims: [string, string] = [targetStackInfo.stackResultDimension, targetStackInfo.stackedOverDimension];
         const targetData = targetStackInfo.data;
         const isStackedByIndex = targetStackInfo.isStackedByIndex;
+        const stackStrategy = targetStackInfo.seriesModel.get('stackStrategy') || 'samesign';
 
         // Should not write on raw data, because stack series model list changes
         // depending on legend selection.
@@ -126,12 +149,16 @@ function calculateStack(stackInfoList: StackInfo[]) {
                     ) as number;
 
                     // Considering positive stack, negative stack and empty data
-                    if ((sum >= 0 && val > 0) // Positive stack
-                        || (sum <= 0 && val < 0) // Negative stack
+                    if (
+                        stackStrategy === 'all' // single stack group
+                        || (stackStrategy === 'positive' && val > 0)
+                        || (stackStrategy === 'negative' && val < 0)
+                        || (stackStrategy === 'samesign' && sum >= 0 && val > 0) // All positive stack
+                        || (stackStrategy === 'samesign' && sum <= 0 && val < 0) // All negative stack
                     ) {
-                        // The sum should be as less as possible to be effected
-                        // by floating arithmetic problem. A wrong result probably
-                        // filtered incorrectly by axis min/max.
+                        // The sum has to be very small to be affected by the
+                        // floating arithmetic problem. An incorrect result will probably
+                        // cause axis min/max to be filtered incorrectly.
                         sum = addSafe(sum, val);
                         stackedOver = val;
                         break;

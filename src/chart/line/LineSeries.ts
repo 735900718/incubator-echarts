@@ -42,13 +42,14 @@ import type Polar from '../../coord/polar/Polar';
 import {createSymbol, ECSymbol} from '../../util/symbol';
 import {Group} from '../../util/graphic';
 import {LegendIconParams} from '../../component/legend/LegendModel';
+import tokens from '../../visual/tokens';
 
 type LineDataValue = OptionDataValue | OptionDataValue[];
 
 interface LineStateOptionMixin {
     emphasis?: {
         focus?: DefaultEmphasisFocus
-        scale?: boolean
+        scale?: boolean | number
     }
 }
 
@@ -72,8 +73,8 @@ export interface LineEndLabelOption extends SeriesLabelOption {
 
 export interface LineSeriesOption extends SeriesOption<LineStateOption<CallbackDataParams>, LineStateOptionMixin & {
     emphasis?: {
-        lineStyle?: LineStyleOption | {
-            width?: 'bolder'
+        lineStyle?: Omit<LineStyleOption, 'width'> & {
+            width?: LineStyleOption['width'] | 'bolder'
         }
         areaStyle?: AreaStyleOption
     }
@@ -101,7 +102,7 @@ export interface LineSeriesOption extends SeriesOption<LineStateOption<CallbackD
     lineStyle?: LineStyleOption
 
     areaStyle?: AreaStyleOption & {
-        origin?: 'auto' | 'start' | 'end'
+        origin?: 'auto' | 'start' | 'end' | number
     }
 
     step?: false | 'start' | 'end' | 'middle'
@@ -119,7 +120,18 @@ export interface LineSeriesOption extends SeriesOption<LineStateOption<CallbackD
 
     data?: (LineDataValue | LineDataItemOption)[]
 
+    /**
+     * @deprecated
+     * This option has been deprecated since v6.0.1.
+     * Use `triggerEvent: 'line'` for only line event or `triggerEvent: true` for both line and area event.
+     */
     triggerLineEvent?: boolean
+
+    /**
+    * Whether to trigger event when hovering on the line or the area
+    * @since v6.0.1
+    */
+    triggerEvent?: boolean | 'line' | 'area'
 }
 
 class LineSeriesModel extends SeriesModel<LineSeriesOption> {
@@ -145,7 +157,7 @@ class LineSeriesModel extends SeriesModel<LineSeriesOption> {
     }
 
     static defaultOption: LineSeriesOption = {
-        zlevel: 0,
+        // zlevel: 0,
         z: 3,
         coordinateSystem: 'cartesian2d',
         legendHoverLink: true,
@@ -171,10 +183,7 @@ class LineSeriesModel extends SeriesModel<LineSeriesOption> {
         },
 
         emphasis: {
-            scale: true,
-            lineStyle: {
-                width: 'bolder'
-            }
+            scale: true
         },
         // areaStyle: {
             // origin of areaStyle. Valid values:
@@ -190,7 +199,7 @@ class LineSeriesModel extends SeriesModel<LineSeriesOption> {
         smooth: false,
         smoothMonotone: null,
         symbol: 'emptyCircle',
-        symbolSize: 4,
+        symbolSize: 6,
         symbolRotate: null,
 
         showSymbol: true,
@@ -200,7 +209,7 @@ class LineSeriesModel extends SeriesModel<LineSeriesOption> {
         //           follow the label interval strategy.
         showAllSymbol: 'auto',
 
-        // Whether to connect break point.
+        // Whether to connect break point. (non-finite values)
         connectNulls: false,
 
         // Sampling for large data. Can be: 'average', 'max', 'min', 'sum', 'lttb'.
@@ -216,7 +225,12 @@ class LineSeriesModel extends SeriesModel<LineSeriesOption> {
             divideShape: 'clone'
         },
 
+        /**
+         * @deprecated
+         */
         triggerLineEvent: false,
+
+        triggerEvent: false
     };
 
     getLegendIcon(opt: LegendIconParams): ECSymbol | Group {
@@ -260,7 +274,7 @@ class LineSeriesModel extends SeriesModel<LineSeriesOption> {
 
         if (symbolType.indexOf('empty') > -1) {
             symbol.style.stroke = symbol.style.fill;
-            symbol.style.fill = '#fff';
+            symbol.style.fill = tokens.color.neutral00;
             symbol.style.lineWidth = 2;
         }
 

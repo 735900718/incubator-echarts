@@ -28,8 +28,16 @@ import type CartesianAxisModel from '../../coord/cartesian/AxisModel';
 import type SeriesData from '../../data/SeriesData';
 import type Axis2D from '../../coord/cartesian/Axis2D';
 import { CoordDimensionDefinition } from '../../data/helper/createDimensions';
+import { CoordinateSystemClipArea } from '../../coord/CoordinateSystem';
+import {
+    SHAPE_CLIP_KIND_FULLY_CLIPPED, SHAPE_CLIP_KIND_NOT_CLIPPED, SHAPE_CLIP_KIND_PARTIALLY_CLIPPED,
+    ShapeClipKind
+} from './createClipPathFromCoordSys';
 
 interface CommonOption extends SeriesOption, SeriesOnCartesianOptionMixin {
+    // - 'horizontal': Multiple whisker boxes (each drawn vertically)
+    //      are arranged side by side horizontally.
+    // - 'vertical': The opposite.
     layout?: LayoutOrient
 
     // data?: (DataItemOption | number[])[]
@@ -41,16 +49,25 @@ interface DataItemOption {
     value?: number[]
 }
 
-interface WhiskerBoxCommonMixin<Opts extends CommonOption> extends SeriesModel<Opts>{}
-class WhiskerBoxCommonMixin<Opts extends CommonOption> {
+export interface WhiskerBoxCommonMixin<Opts extends CommonOption> extends SeriesModel<Opts>{}
+export class WhiskerBoxCommonMixin<Opts extends CommonOption> {
+
+    private _baseAxisDim: string;
+
+    defaultValueDimensions: CoordDimensionDefinition['dimsDef'];
+
+    /**
+     * Computed layout.
+     */
+    private _layout: CommonOption['layout'];
 
     /**
      * @private
-     * @type {string}
      */
-    _baseAxisDim: string;
-
-    defaultValueDimensions: CoordDimensionDefinition['dimsDef'];
+    _hasEncodeRule(key: string) {
+        const encodeRules = this.getEncode();
+        return encodeRules && encodeRules.get(key) != null;
+    }
 
     /**
      * @override
@@ -68,25 +85,33 @@ class WhiskerBoxCommonMixin<Opts extends CommonOption> {
         const yAxisType = yAxisModel.get('type');
         let addOrdinal;
 
-        // FIXME
-        // Consider time axis.
-
+        // Theoretically, if `encode` and/or `layout` are not specified, they can be derived from
+        // the specified one (also according to axis types). However, only the logic for deriving
+        // `encode` from `layout` is implemented; the reverse direction is not implemented yet,
+        // due to its complexity and low priority.
+        let layout = option.layout;
+        // 'category' axis has historically been enforcing `layout` regardless of its presence.
+        // This behavior is preserved until it causes problems.
         if (xAxisType === 'category') {
-            option.layout = 'horizontal';
+            layout = 'horizontal';
             ordinalMeta = xAxisModel.getOrdinalMeta();
-            addOrdinal = true;
+            addOrdinal = !this._hasEncodeRule('x');
         }
         else if (yAxisType === 'category') {
-            option.layout = 'vertical';
+            layout = 'vertical';
             ordinalMeta = yAxisModel.getOrdinalMeta();
-            addOrdinal = true;
+            addOrdinal = !this._hasEncodeRule('y');
         }
-        else {
-            option.layout = option.layout || 'horizontal';
+        if (!layout) {
+            layout = yAxisType === 'time' ? 'vertical' : 'horizontal';
+            // It is theoretically possible for an axis with type "time" to serve as the "value axis".
+            // `layout` can be explicitly specified for that case.
         }
+        // Do not assign the computed `layout` to `option.layout`, otherwise the idempotent may be broken.
+        this._layout = layout;
 
         const coordDims = ['x', 'y'];
-        const baseAxisDimIndex = option.layout === 'horizontal' ? 0 : 1;
+        const baseAxisDimIndex = layout === 'horizontal' ? 0 : 1;
         const baseAxisDim = this._baseAxisDim = coordDims[baseAxisDimIndex];
         const otherAxisDim = coordDims[1 - baseAxisDimIndex];
         const axisModels = [xAxisModel, yAxisModel];
@@ -158,7 +183,32 @@ class WhiskerBoxCommonMixin<Opts extends CommonOption> {
         ) as CartesianAxisModel).axis;
     }
 
+    getWhiskerBoxesLayout() {
+        return this._layout;
+    }
+
 };
 
-
-export {WhiskerBoxCommonMixin};
+/**
+ * PENDING: We do not use zr Element clipPath due to performance consideration,
+ * although it may be further optimized.
+ */
+export function resolveNormalBoxClipping(
+    clipArea: CoordinateSystemClipArea,
+    itemLayout: {
+        ends: number[][];
+    }
+): ShapeClipKind {
+    const count = itemLayout.ends.length;
+    let containCount = 0;
+    for (let i = 0; i < count; i++) {
+        // clip if any points is out of the area, otherwise the shape may partially
+        // out of the coord sys area and overlap with axis labels.
+        if (clipArea.contain(itemLayout.ends[i][0], itemLayout.ends[i][1])) {
+            containCount++;
+        }
+    }
+    return !containCount ? SHAPE_CLIP_KIND_FULLY_CLIPPED
+        : containCount < count ? SHAPE_CLIP_KIND_PARTIALLY_CLIPPED
+        : SHAPE_CLIP_KIND_NOT_CLIPPED;
+}

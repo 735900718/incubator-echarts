@@ -16,15 +16,15 @@
 * specific language governing permissions and limitations
 * under the License.
 */
-import * as zrUtil from 'zrender/src/core/util';
+import { bind, each, clone, trim, isString, isFunction, isArray, isObject, extend } from 'zrender/src/core/util';
 import env from 'zrender/src/core/env';
 import TooltipHTMLContent from './TooltipHTMLContent';
 import TooltipRichContent from './TooltipRichContent';
-import * as formatUtil from '../../util/format';
-import * as numberUtil from '../../util/number';
-import * as graphic from '../../util/graphic';
+import { convertToColorString, encodeHTML, formatTpl, TooltipMarker } from '../../util/format';
+import { parsePercent } from '../../util/number';
+import { Rect } from '../../util/graphic';
 import findPointFromSeries from '../axisPointer/findPointFromSeries';
-import * as layoutUtil from '../../util/layout';
+import { getLayoutRect } from '../../util/layout';
 import Model from '../../model/Model';
 import * as globalListener from '../axisPointer/globalListener';
 import * as axisHelper from '../../coord/axisHelper';
@@ -50,20 +50,15 @@ import ExtensionAPI from '../../core/ExtensionAPI';
 import TooltipModel, { TooltipOption } from './TooltipModel';
 import Element from 'zrender/src/Element';
 import { AxisBaseModel } from '../../coord/AxisBaseModel';
-// import { isDimensionStacked } from '../../data/helper/dataStackHelper';
 import { ECData, getECData } from '../../util/innerStore';
 import { shouldTooltipConfine } from './helper';
 import { DataByCoordSys, DataByAxis } from '../axisPointer/axisTrigger';
 import { normalizeTooltipFormatResult } from '../../model/mixin/dataFormat';
 import { createTooltipMarkup, buildTooltipMarkup, TooltipMarkupStyleCreator } from './tooltipMarkup';
 import { findEventDispatcher } from '../../util/event';
-import { throttle } from '../../util/throttle';
+import { clear, createOrUpdate } from '../../util/throttle';
 
-const bind = zrUtil.bind;
-const each = zrUtil.each;
-const parsePercent = numberUtil.parsePercent;
-
-const proxyRect = new graphic.Rect({
+const proxyRect = new Rect({
     shape: { x: -1, y: -1, width: 2, height: 2 }
 });
 
@@ -137,7 +132,7 @@ type TooltipCallbackDataParams = CallbackDataParams & {
     // TODO: TYPE Value type
     axisValue?: string | number
     axisValueLabel?: string
-    marker?: formatUtil.TooltipMarker
+    marker?: TooltipMarker
 };
 
 class TooltipView extends ComponentView {
@@ -151,8 +146,6 @@ class TooltipView extends ComponentView {
     private _ecModel: GlobalModel;
 
     private _api: ExtensionAPI;
-
-    private _alwaysShowContent: boolean;
 
     private _tooltipContent: TooltipHTMLContent | TooltipRichContent;
 
@@ -168,21 +161,18 @@ class TooltipView extends ComponentView {
     private _lastDataByCoordSys: DataByCoordSys[];
     private _cbParamsList: TooltipCallbackDataParams[];
 
-    private _updatePosition: ReturnType<typeof throttle> | TooltipView['_doUpdatePosition'];
-
     init(ecModel: GlobalModel, api: ExtensionAPI) {
-        if (env.node) {
+        if (env.node || !api.getDom()) {
             return;
         }
 
         const tooltipModel = ecModel.getComponent('tooltip') as TooltipModel;
-        const renderMode = tooltipModel.get('renderMode');
-        this._renderMode = getTooltipRenderMode(renderMode);
+        const renderMode = this._renderMode = getTooltipRenderMode(tooltipModel.get('renderMode'));
 
-        this._tooltipContent = this._renderMode === 'richText'
+        this._tooltipContent = renderMode === 'richText'
             ? new TooltipRichContent(api)
-            : new TooltipHTMLContent(api.getDom(), api, {
-                appendToBody: tooltipModel.get('appendToBody', true)
+            : new TooltipHTMLContent(api, {
+                appendTo: tooltipModel.get('appendToBody', true) ? 'body' : tooltipModel.get('appendTo', true)
             });
     }
 
@@ -191,7 +181,7 @@ class TooltipView extends ComponentView {
         ecModel: GlobalModel,
         api: ExtensionAPI
     ) {
-        if (env.node) {
+        if (env.node || !api.getDom()) {
             return;
         }
 
@@ -204,12 +194,6 @@ class TooltipView extends ComponentView {
 
         this._api = api;
 
-        /**
-         * @private
-         * @type {boolean}
-         */
-        this._alwaysShowContent = tooltipModel.get('alwaysShowContent');
-
         const tooltipContent = this._tooltipContent;
         tooltipContent.update(tooltipModel);
         tooltipContent.setEnterable(tooltipModel.get('enterable'));
@@ -220,14 +204,16 @@ class TooltipView extends ComponentView {
 
         // PENDING
         // `mousemove` event will be triggered very frequently when the mouse moves fast,
-        // which causes that the updatePosition was also called very frequently.
-        // In Chrome with devtools open and Firefox, tooltip looks lagged and shaked around. See #14695.
-        // To avoid the frequent triggering,
-        // consider throttling it in 50ms. (the tested result may need to validate)
-        this._updatePosition =
-            this._renderMode === 'html'
-                ? throttle(bind(this._doUpdatePosition, this), 50)
-                : this._doUpdatePosition;
+        // which causes that the `updatePosition` function was also called frequently.
+        // In Chrome with devtools open and Firefox, tooltip looks laggy and shakes. See #14695 #16101
+        // To avoid frequent triggering,
+        // consider throttling it in 50ms when transition is enabled
+        if (this._renderMode !== 'richText' && tooltipModel.get('transitionDuration')) {
+            createOrUpdate(this, '_updatePosition', 50, 'fixRate');
+        }
+        else {
+            clear(this, '_updatePosition');
+        }
     }
 
     private _initGlobalListener() {
@@ -255,6 +241,13 @@ class TooltipView extends ComponentView {
         const tooltipModel = this._tooltipModel;
         const ecModel = this._ecModel;
         const api = this._api;
+        const triggerOn = tooltipModel.get('triggerOn');
+
+        if (tooltipModel.get('trigger') !== 'axis') {
+            // _lastDataByCoordSys and _cbParamsList are used for axis tooltip only.
+            this._lastDataByCoordSys = null;
+            this._cbParamsList = null;
+        }
 
         // Try to keep the tooltip show when refreshing
         if (this._lastX != null
@@ -262,7 +255,8 @@ class TooltipView extends ComponentView {
             // When user is willing to control tooltip totally using API,
             // self.manuallyShowTip({x, y}) might cause tooltip hide,
             // which is not expected.
-            && tooltipModel.get('triggerOn') !== 'none'
+            && triggerOn !== 'none'
+            && triggerOn !== 'click'
         ) {
             const self = this;
             clearTimeout(this._refreshUpdateTimeout);
@@ -301,7 +295,7 @@ class TooltipView extends ComponentView {
         api: ExtensionAPI,
         payload: ShowTipPayload
     ) {
-        if (payload.from === this.uid || env.node) {
+        if (payload.from === this.uid || env.node || !api.getDom()) {
             return;
         }
 
@@ -400,11 +394,12 @@ class TooltipView extends ComponentView {
     ) {
         const tooltipContent = this._tooltipContent;
 
-        if (!this._alwaysShowContent && this._tooltipModel) {
+        if (this._tooltipModel) {
             tooltipContent.hideLater(this._tooltipModel.get('hideDelay'));
         }
 
         this._lastX = this._lastY = this._lastDataByCoordSys = null;
+        this._cbParamsList = null;
 
         if (payload.from !== this.uid) {
             this._hide(makeDispatchAction(payload, api));
@@ -461,7 +456,6 @@ class TooltipView extends ComponentView {
     ) {
         const el = e.target;
         const tooltipModel = this._tooltipModel;
-
         if (!tooltipModel) {
             return;
         }
@@ -475,20 +469,31 @@ class TooltipView extends ComponentView {
             this._showAxisTooltip(dataByCoordSys, e);
         }
         else if (el) {
+            const ecData = getECData(el);
+            if (ecData.ssrType === 'legend') {
+                // Don't trigger tooltip for legend tooltip item
+                return;
+            }
             this._lastDataByCoordSys = null;
+            this._cbParamsList = null;
 
             let seriesDispatcher: Element;
             let cmptDispatcher: Element;
-            findEventDispatcher(el, (target) => {
+            findEventDispatcher(el, function (target) {
+                if ((target as ECElement).tooltipDisabled) {
+                    seriesDispatcher = cmptDispatcher = null;
+                    return true;
+                }
+                if (seriesDispatcher || cmptDispatcher) {
+                    return;
+                }
                 // Always show item tooltip if mouse is on the element with dataIndex
                 if (getECData(target).dataIndex != null) {
                     seriesDispatcher = target;
-                    return true;
                 }
                 // Tooltip provided directly. Like legend.
-                if (getECData(target).tooltipConfig != null) {
+                else if (getECData(target).tooltipConfig != null) {
                     cmptDispatcher = target;
-                    return true;
                 }
             }, true);
 
@@ -504,6 +509,7 @@ class TooltipView extends ComponentView {
         }
         else {
             this._lastDataByCoordSys = null;
+            this._cbParamsList = null;
             this._hide(dispatchAction);
         }
     }
@@ -517,7 +523,7 @@ class TooltipView extends ComponentView {
         // something. `showDelay` makes it easier to enter the content
         // but tooltip do not move immediately.
         const delay = tooltipModel.get('showDelay');
-        cb = zrUtil.bind(cb, this);
+        cb = bind(cb, this);
         clearTimeout(this._showTimout);
         delay > 0
             ? (this._showTimout = setTimeout(cb, delay) as any)
@@ -549,23 +555,28 @@ class TooltipView extends ComponentView {
             each(itemCoordSys.dataByAxis, function (axisItem) {
                 const axisModel = ecModel.getComponent(axisItem.axisDim + 'Axis', axisItem.axisIndex) as AxisBaseModel;
                 const axisValue = axisItem.value;
+                const axis = axisModel.axis;
+                const axisValueParsed = axis.scale.parse(axisValue);
                 if (!axisModel || axisValue == null) {
                     return;
                 }
+                // FIXME: when using `tooltip.trigger: 'axis'`, the precision of the axis value displayed in tooltip
+                //  should match the original series values rather than using the default strategy in Interval.ts
+                //  (getPrecision(interval) + 2); otherwise it may cause confusion.
                 const axisValueLabel = axisPointerViewHelper.getValueLabel(
-                    axisValue, axisModel.axis, ecModel,
+                    axisValue, axis, ecModel,
                     axisItem.seriesDataIndices,
                     axisItem.valueLabelOpt
                 );
                 const axisSectionMarkup = createTooltipMarkup('section', {
                     header: axisValueLabel,
-                    noHeader: !zrUtil.trim(axisValueLabel),
+                    noHeader: !trim(axisValueLabel),
                     sortBlocks: true,
                     blocks: []
                 });
                 articleMarkup.blocks.push(axisSectionMarkup);
 
-                zrUtil.each(axisItem.seriesDataIndices, function (idxItem) {
+                each(axisItem.seriesDataIndices, function (idxItem) {
                     const series = ecModel.getSeriesByIndex(idxItem.seriesIndex);
                     const dataIndex = idxItem.dataIndexInside;
                     const cbParams = series.getDataParams(dataIndex) as TooltipCallbackDataParams;
@@ -579,23 +590,28 @@ class TooltipView extends ComponentView {
                     cbParams.axisType = axisItem.axisType;
                     cbParams.axisId = axisItem.axisId;
                     cbParams.axisValue = axisHelper.getAxisRawValue(
-                        axisModel.axis, { value: axisValue as number }
+                        axisModel.axis, { value: axisValueParsed }
                     );
                     cbParams.axisValueLabel = axisValueLabel;
                     // Pre-create marker style for makers. Users can assemble richText
                     // text in `formatter` callback and use those markers style.
                     cbParams.marker = markupStyleCreator.makeTooltipMarker(
-                        'item', formatUtil.convertToColorString(cbParams.color), renderMode
+                        'item', convertToColorString(cbParams.color), renderMode
                     );
 
                     const seriesTooltipResult = normalizeTooltipFormatResult(
                         series.formatTooltip(dataIndex, true, null)
                     );
-                    if (seriesTooltipResult.markupFragment) {
-                        axisSectionMarkup.blocks.push(seriesTooltipResult.markupFragment);
+                    const frag = seriesTooltipResult.frag;
+                    if (frag) {
+                        const valueFormatter = buildTooltipModel(
+                            [series as Model<TooltipableOption>],
+                            globalTooltipModel
+                        ).get('valueFormatter');
+                        axisSectionMarkup.blocks.push(valueFormatter ? extend({ valueFormatter }, frag) : frag);
                     }
-                    if (seriesTooltipResult.markupText) {
-                        markupTextArrLegacy.push(seriesTooltipResult.markupText);
+                    if (seriesTooltipResult.text) {
+                        markupTextArrLegacy.push(seriesTooltipResult.text);
                     }
                     cbParamsList.push(cbParams);
                 });
@@ -681,23 +697,24 @@ class TooltipView extends ComponentView {
         // Pre-create marker style for makers. Users can assemble richText
         // text in `formatter` callback and use those markers style.
         params.marker = markupStyleCreator.makeTooltipMarker(
-            'item', formatUtil.convertToColorString(params.color), renderMode
+            'item', convertToColorString(params.color), renderMode
         );
 
         const seriesTooltipResult = normalizeTooltipFormatResult(
             dataModel.formatTooltip(dataIndex, false, dataType)
         );
         const orderMode = tooltipModel.get('order');
-        const markupText = seriesTooltipResult.markupFragment
-            ? buildTooltipMarkup(
-                seriesTooltipResult.markupFragment,
+        const valueFormatter = tooltipModel.get('valueFormatter');
+        const frag = seriesTooltipResult.frag;
+        const markupText = frag ? buildTooltipMarkup(
+                valueFormatter ? extend({ valueFormatter }, frag) : frag,
                 markupStyleCreator,
                 renderMode,
                 orderMode,
                 ecModel.get('useUTC'),
                 tooltipModel.get('textStyle')
             )
-            : seriesTooltipResult.markupText;
+            : seriesTooltipResult.text;
 
         const asyncTicket = 'item_' + dataModel.name + '_' + dataIndex;
 
@@ -725,16 +742,28 @@ class TooltipView extends ComponentView {
         el: ECElement,
         dispatchAction: ExtensionAPI['dispatchAction']
     ) {
+        const isHTMLRenderMode = this._renderMode === 'html';
         const ecData = getECData(el);
         const tooltipConfig = ecData.tooltipConfig;
         let tooltipOpt = tooltipConfig.option || {};
-        if (zrUtil.isString(tooltipOpt)) {
+        let encodeHTMLContent = tooltipOpt.encodeHTMLContent;
+        if (isString(tooltipOpt)) {
             const content = tooltipOpt;
             tooltipOpt = {
                 content: content,
                 // Fixed formatter
                 formatter: content
             };
+            // when `tooltipConfig.option` is a string rather than an object,
+            // we can't know if the content needs to be encoded
+            // for the sake of security, encode it by default.
+            encodeHTMLContent = true;
+        }
+
+        if (encodeHTMLContent && isHTMLRenderMode && tooltipOpt.content) {
+            // clone might be unnecessary?
+            tooltipOpt = clone(tooltipOpt);
+            tooltipOpt.content = encodeHTML(tooltipOpt.content);
         }
 
         const tooltipModelCascade = [tooltipOpt] as TooltipModelOptionCascade[];
@@ -743,8 +772,8 @@ class TooltipView extends ComponentView {
             tooltipModelCascade.push(cmpt as Model<TooltipableOption>);
         }
         // In most cases, component tooltip formatter has different params with series tooltip formatter,
-        // so that they can not share the same formatter. Since the global tooltip formatter is used for series
-        // by convension, we do not use it as the default formatter for component.
+        // so that they cannot share the same formatter. Since the global tooltip formatter is used for series
+        // by convention, we do not use it as the default formatter for component.
         tooltipModelCascade.push({ formatter: tooltipOpt.content });
 
         const positionDefault = e.positionDefault;
@@ -766,7 +795,7 @@ class TooltipView extends ComponentView {
         this._showOrMove(subTooltipModel, function (this: TooltipView) {
             // Use formatterParams from element defined in component
             // Avoid users modify it.
-            const formatterParams = zrUtil.clone(subTooltipModel.get('formatterParams') as any || {});
+            const formatterParams = clone(subTooltipModel.get('formatterParams') as any || {});
             this._showTooltipContent(
                 subTooltipModel, defaultHtml, formatterParams,
                 asyncTicket, e.offsetX, e.offsetY, e.position, el, markupStyleCreator
@@ -781,7 +810,7 @@ class TooltipView extends ComponentView {
     }
 
     private _showTooltipContent(
-        // Use Model<TooltipOption> insteadof TooltipModel because this model may be from series or other options.
+        // Use Model<TooltipOption> instead of TooltipModel because this model may be from series or other options.
         // Instead of top level tooltip.
         tooltipModel: Model<TooltipOption>,
         defaultHtml: string,
@@ -801,6 +830,7 @@ class TooltipView extends ComponentView {
         }
 
         const tooltipContent = this._tooltipContent;
+        tooltipContent.setEnterable(tooltipModel.get('enterable'));
 
         const formatter = tooltipModel.get('formatter');
         positionExpr = positionExpr || tooltipModel.get('position');
@@ -809,22 +839,23 @@ class TooltipView extends ComponentView {
             [x, y],
             params,
             tooltipModel.get('trigger'),
-            tooltipModel.get('borderColor')
+            tooltipModel.get('borderColor'),
+            tooltipModel.get('defaultBorderColor', true)
         );
         const nearPointColor = nearPoint.color;
 
         if (formatter) {
-            if (zrUtil.isString(formatter)) {
+            if (isString(formatter)) {
                 const useUTC = tooltipModel.ecModel.get('useUTC');
-                const params0 = zrUtil.isArray(params) ? params[0] : params;
+                const params0 = isArray(params) ? params[0] : params;
                 const isTimeAxis = params0 && params0.axisType && params0.axisType.indexOf('time') >= 0;
                 html = formatter;
                 if (isTimeAxis) {
                     html = timeFormat(params0.axisValue, html, useUTC);
                 }
-                html = formatUtil.formatTpl(html, params, true);
+                html = formatTpl(html, params, true);
             }
-            else if (zrUtil.isFunction(formatter)) {
+            else if (isFunction(formatter)) {
                 const callback = bind(function (cbTicket: string, html: string | HTMLElement | HTMLElement[]) {
                     if (cbTicket === this._ticket) {
                         tooltipContent.setContent(html, markupStyleCreator, tooltipModel, nearPointColor, positionExpr);
@@ -853,24 +884,25 @@ class TooltipView extends ComponentView {
         point: number[],
         tooltipDataParams: TooltipCallbackDataParams | TooltipCallbackDataParams[],
         trigger: TooltipOption['trigger'],
-        borderColor: ZRColor
+        borderColor: ZRColor,
+        defaultBorderColor: ZRColor
     ): {
         color: ZRColor;
     } {
-        if (trigger === 'axis' || zrUtil.isArray(tooltipDataParams)) {
+        if (trigger === 'axis' || isArray(tooltipDataParams)) {
             return {
-                color: borderColor || (this._renderMode === 'html' ? '#fff' : 'none')
+                color: borderColor || defaultBorderColor
             };
         }
 
-        if (!zrUtil.isArray(tooltipDataParams)) {
+        if (!isArray(tooltipDataParams)) {
             return {
                 color: borderColor || tooltipDataParams.color || tooltipDataParams.borderColor
             };
         }
     }
 
-    private _doUpdatePosition(
+    _updatePosition(
         tooltipModel: Model<TooltipOption>,
         positionExpr: TooltipOption['position'],
         x: number,  // Mouse x
@@ -890,7 +922,7 @@ class TooltipView extends ComponentView {
         const rect = el && el.getBoundingRect().clone();
         el && rect.applyTransform(el.transform);
 
-        if (zrUtil.isFunction(positionExpr)) {
+        if (isFunction(positionExpr)) {
             // Callback of position can be an array or a string specify the position
             positionExpr = positionExpr([x, y], params, content.el, rect, {
                 viewSize: [viewWidth, viewHeight],
@@ -898,15 +930,15 @@ class TooltipView extends ComponentView {
             });
         }
 
-        if (zrUtil.isArray(positionExpr)) {
+        if (isArray(positionExpr)) {
             x = parsePercent(positionExpr[0], viewWidth);
             y = parsePercent(positionExpr[1], viewHeight);
         }
-        else if (zrUtil.isObject(positionExpr)) {
+        else if (isObject(positionExpr)) {
             const boxLayoutPosition = positionExpr as BoxLayoutOptionMixin;
             boxLayoutPosition.width = contentSize[0];
             boxLayoutPosition.height = contentSize[1];
-            const layoutRect = layoutUtil.getLayoutRect(
+            const layoutRect = getLayoutRect(
                 boxLayoutPosition, { width: viewWidth, height: viewHeight }
             );
             x = layoutRect.x;
@@ -917,7 +949,7 @@ class TooltipView extends ComponentView {
             vAlign = null;
         }
         // Specify tooltip position by string 'top' 'bottom' 'left' 'right' around graphic element
-        else if (zrUtil.isString(positionExpr) && el) {
+        else if (isString(positionExpr) && el) {
             const pos = calcTooltipPosition(
                 positionExpr, rect, contentSize, tooltipModel.get('borderWidth')
             );
@@ -982,7 +1014,7 @@ class TooltipView extends ComponentView {
                 });
 
                 // check is cbParams data value changed
-                lastCbParamsList && zrUtil.each(lastItem.seriesDataIndices, (idxItem) => {
+                lastCbParamsList && each(lastItem.seriesDataIndices, (idxItem) => {
                     const seriesIdx = idxItem.seriesIndex;
                     const cbParams = cbParamsList[seriesIdx];
                     const lastCbParams = lastCbParamsList[seriesIdx];
@@ -1006,6 +1038,7 @@ class TooltipView extends ComponentView {
         // FIXME
         // duplicated hideTip if manuallyHideTip is called from dispatchAction.
         this._lastDataByCoordSys = null;
+        this._cbParamsList = null;
         dispatchAction({
             type: 'hideTip',
             from: this.uid
@@ -1013,11 +1046,17 @@ class TooltipView extends ComponentView {
     }
 
     dispose(ecModel: GlobalModel, api: ExtensionAPI) {
-        if (env.node) {
+        if (env.node || !api.getDom()) {
             return;
         }
+        clear(this, '_updatePosition');
         this._tooltipContent.dispose();
         globalListener.unregister('itemTooltip', api);
+
+        this._tooltipContent = null;
+        this._tooltipModel = null;
+        this._lastDataByCoordSys = null;
+        this._cbParamsList = null;
     }
 }
 
@@ -1057,7 +1096,7 @@ function buildTooltipModel(
             //  value: 10,
             //  tooltip: 'Something you need to know'
             // }
-            if (zrUtil.isString(tooltipOpt)) {
+            if (isString(tooltipOpt)) {
                 tooltipOpt = {
                     formatter: tooltipOpt
                 };
@@ -1072,7 +1111,7 @@ function buildTooltipModel(
 }
 
 function makeDispatchAction(payload: ShowTipPayload | HideTipPayload, api: ExtensionAPI) {
-    return payload.dispatchAction || zrUtil.bind(api.dispatchAction, api);
+    return payload.dispatchAction || bind(api.dispatchAction, api);
 }
 
 function refixTooltipPosition(
@@ -1087,7 +1126,7 @@ function refixTooltipPosition(
 
     if (gapH != null) {
         // Add extra 2 pixels for this case:
-        // At present the "values" in defaut tooltip are using CSS `float: right`.
+        // At present the "values" in default tooltip are using CSS `float: right`.
         // When the right edge of the tooltip box is on the right side of the
         // viewport, the `float` layout might push the "values" to the second line.
         if (x + width + gapH + 2 > viewWidth) {

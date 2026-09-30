@@ -25,11 +25,15 @@ import {
     fetchLayoutMode
 } from '../util/layout';
 import OrdinalMeta from '../data/OrdinalMeta';
-import { DimensionName, BoxLayoutOptionMixin, OrdinalRawValue } from '../util/types';
+import {
+    DimensionName, BoxLayoutOptionMixin, OrdinalRawValue,
+} from '../util/types';
 import { AxisBaseOption, AXIS_TYPES, CategoryAxisBaseOption } from './axisCommonTypes';
 import GlobalModel from '../model/Global';
 import { each, merge } from 'zrender/src/core/util';
 import { EChartsExtensionInstallRegisters } from '../extension';
+import { BaseAxisBreakPayload } from '../component/axis/axisAction';
+import { AxisBreakUpdateResult, getAxisBreakHelper } from '../component/axis/axisBreakHelper';
 
 
 type Constructor<T> = new (...args: any[]) => T;
@@ -37,6 +41,7 @@ type Constructor<T> = new (...args: any[]) => T;
 export interface AxisModelExtendedInCreator {
     getCategories(rawData?: boolean): OrdinalRawValue[] | CategoryAxisBaseOption['data']
     getOrdinalMeta(): OrdinalMeta
+    updateAxisBreaks(payload: BaseAxisBreakPayload): AxisBreakUpdateResult;
 }
 
 /**
@@ -103,6 +108,8 @@ export default function axisModelCreator<
                 // warning if called before all of 'getInitailData' finished.
                 if (option.type === 'category') {
                     if (rawData) {
+                        // NOTICE: return the raw data even if not existing; never use a fallback like `[]`;
+                        // Its existence matters in some legacy cases.
                         return (option as CategoryAxisBaseOption).data;
                     }
                     return this.__ordinalMeta.categories;
@@ -112,6 +119,14 @@ export default function axisModelCreator<
             getOrdinalMeta(): OrdinalMeta {
                 return this.__ordinalMeta;
             }
+
+            updateAxisBreaks(payload: BaseAxisBreakPayload): AxisBreakUpdateResult {
+                const axisBreakHelper = getAxisBreakHelper();
+                return axisBreakHelper
+                    ? axisBreakHelper.updateModelAxisBreak(this, payload)
+                    : {breaks: []};
+            }
+
         }
 
         registers.registerComponentModel(AxisModel);

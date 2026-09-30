@@ -23,7 +23,8 @@ import {
     SeriesOption,
     SeriesOnPolarOptionMixin,
     SeriesOnCartesianOptionMixin,
-    SeriesOnCalendarOptionMixin,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
     SeriesOnGeoOptionMixin,
     SeriesOnSingleOptionMixin,
     SymbolOptionMixin,
@@ -37,15 +38,15 @@ import {
 } from '../../util/types';
 import GlobalModel from '../../model/Global';
 import SeriesData from '../../data/SeriesData';
-import type { SymbolDrawItemModelOption } from '../helper/SymbolDraw';
 import { BrushCommonSelectorsForSeries } from '../../component/brush/selector';
+import { SymbolDrawItemModelOption } from '../helper/baseDraw';
 
 type ScatterDataValue = OptionDataValue | OptionDataValue[];
 
 interface EffectScatterStatesOptionMixin {
     emphasis?: {
         focus?: DefaultEmphasisFocus
-        scale?: boolean
+        scale?: boolean | number
     }
 }
 export interface EffectScatterStateOption<TCbParams = never> {
@@ -66,7 +67,8 @@ export interface EffectScatterDataItemOption extends SymbolOptionMixin,
 export interface EffectScatterSeriesOption
     extends SeriesOption<EffectScatterStateOption<CallbackDataParams>, EffectScatterStatesOptionMixin>,
     EffectScatterStateOption<CallbackDataParams>,
-    SeriesOnCartesianOptionMixin, SeriesOnPolarOptionMixin, SeriesOnCalendarOptionMixin,
+    SeriesOnCartesianOptionMixin, SeriesOnPolarOptionMixin,
+    ComponentOnCalendarOptionMixin, ComponentOnMatrixOptionMixin,
     SeriesOnGeoOptionMixin, SeriesOnSingleOptionMixin, SymbolOptionMixin<CallbackDataParams>,
     SeriesEncodeOptionMixin {
 
@@ -107,7 +109,7 @@ class EffectScatterSeriesModel extends SeriesModel<EffectScatterSeriesOption> {
 
     static defaultOption: EffectScatterSeriesOption = {
         coordinateSystem: 'cartesian2d',
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
         legendHoverLink: true,
 

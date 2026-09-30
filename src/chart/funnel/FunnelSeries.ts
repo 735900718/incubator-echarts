@@ -37,11 +37,14 @@ import {
     VerticalAlign,
     SeriesLabelOption,
     SeriesEncodeOptionMixin,
-    DefaultStatesMixinEmpasis,
-    CallbackDataParams
+    DefaultStatesMixinEmphasis,
+    CallbackDataParams,
+    ComponentOnMatrixOptionMixin,
+    ComponentOnCalendarOptionMixin
 } from '../../util/types';
 import GlobalModel from '../../model/Global';
 import SeriesData from '../../data/SeriesData';
+import tokens from '../../visual/tokens';
 
 type FunnelLabelOption = Omit<SeriesLabelOption, 'position'> & {
     position?: LabelOption['position']
@@ -49,7 +52,7 @@ type FunnelLabelOption = Omit<SeriesLabelOption, 'position'> & {
 };
 
 interface FunnelStatesMixin {
-    emphasis?: DefaultStatesMixinEmpasis
+    emphasis?: DefaultStatesMixinEmphasis
 }
 
 export interface FunnelCallbackDataParams extends CallbackDataParams {
@@ -74,6 +77,7 @@ export interface FunnelDataItemOption
 export interface FunnelSeriesOption
     extends SeriesOption<FunnelStateOption<FunnelCallbackDataParams>, FunnelStatesMixin>,
     FunnelStateOption<FunnelCallbackDataParams>,
+    ComponentOnCalendarOptionMixin, ComponentOnMatrixOptionMixin,
     BoxLayoutOptionMixin, SeriesEncodeOptionMixin {
     type?: 'funnel'
 
@@ -97,9 +101,11 @@ export interface FunnelSeriesOption
     data?: (OptionDataValueNumeric | OptionDataValueNumeric[] | FunnelDataItemOption)[]
 }
 
+export const SERIES_TYPE_FUNNEL = 'funnel';
+
 class FunnelSeriesModel extends SeriesModel<FunnelSeriesOption> {
-    static type = 'series.funnel' as const;
-    type = FunnelSeriesModel.type;
+    static readonly type = 'series.' + SERIES_TYPE_FUNNEL;
+    readonly type = FunnelSeriesModel.type;
 
     init(option: FunnelSeriesOption) {
         super.init.apply(this, arguments as any);
@@ -147,14 +153,15 @@ class FunnelSeriesModel extends SeriesModel<FunnelSeriesOption> {
     }
 
     static defaultOption: FunnelSeriesOption = {
-        zlevel: 0,                  // 一级层叠
+        coordinateSystemUsage: 'box',
+        // zlevel: 0,                  // 一级层叠
         z: 2,                       // 二级层叠
         legendHoverLink: true,
         colorBy: 'data',
         left: 80,
         top: 60,
         right: 80,
-        bottom: 60,
+        bottom: 65,
         // width: {totalWidth} - left - right,
         // height: {totalHeight} - top - bottom,
 
@@ -182,7 +189,7 @@ class FunnelSeriesModel extends SeriesModel<FunnelSeriesOption> {
         },
         itemStyle: {
             // color: 各异,
-            borderColor: '#fff',
+            borderColor: tokens.color.neutral00,
             borderWidth: 1
         },
         emphasis: {
@@ -192,7 +199,7 @@ class FunnelSeriesModel extends SeriesModel<FunnelSeriesOption> {
         },
         select: {
             itemStyle: {
-                borderColor: '#212121'
+                borderColor: tokens.color.primary
             }
         }
     };

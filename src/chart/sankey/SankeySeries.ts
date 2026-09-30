@@ -34,12 +34,18 @@ import {
     GraphEdgeItemObject,
     OptionDataValueNumeric,
     DefaultEmphasisFocus,
-    CallbackDataParams
+    CallbackDataParams,
+    RoamOptionMixin,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
+    RoamHostModel
 } from '../../util/types';
 import GlobalModel from '../../model/Global';
 import SeriesData from '../../data/SeriesData';
 import { LayoutRect } from '../../util/layout';
 import { createTooltipMarkup } from '../../component/tooltip/tooltipMarkup';
+import type View from '../../coord/View';
+import tokens from '../../visual/tokens';
 
 
 type FocusNodeAdjacency = boolean | 'inEdges' | 'outEdges' | 'allEdges';
@@ -61,7 +67,7 @@ interface SankeyEdgeStyleOption extends LineStyleOption {
 
 interface ExtraStateOption {
     emphasis?: {
-        focus?: DefaultEmphasisFocus | 'adjacency'
+        focus?: DefaultEmphasisFocus | 'adjacency' | 'trajectory'
     }
 }
 
@@ -85,6 +91,7 @@ export interface SankeyEdgeItemOption extends
         StatesOptionMixin<SankeyEdgeStateOption, ExtraStateOption>,
         GraphEdgeItemObject<OptionDataValueNumeric> {
     focusNodeAdjacency?: FocusNodeAdjacency
+    edgeLabel?: SeriesLabelOption
 }
 
 export interface SankeyLevelOption extends SankeyNodeStateOption, SankeyEdgeStateOption {
@@ -94,7 +101,10 @@ export interface SankeyLevelOption extends SankeyNodeStateOption, SankeyEdgeStat
 export interface SankeySeriesOption
     extends SeriesOption<SankeyBothStateOption<CallbackDataParams>, ExtraStateOption>,
     SankeyBothStateOption<CallbackDataParams>,
-    BoxLayoutOptionMixin {
+    BoxLayoutOptionMixin,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
+    RoamOptionMixin {
     type?: 'sankey'
 
     /**
@@ -127,6 +137,11 @@ export interface SankeySeriesOption
      * The number of iterations to change the position of the node
      */
     layoutIterations?: number
+    /**
+     * Sorting method used when resolving node collisions within each depth column.
+     * Set to null to preserve the original node order.
+     */
+    sort?: 'desc' | null
 
     nodeAlign?: 'justify' | 'left' | 'right'    // TODO justify should be auto
 
@@ -137,11 +152,21 @@ export interface SankeySeriesOption
     links?: SankeyEdgeItemOption[]
 
     levels?: SankeyLevelOption[]
+
+    edgeLabel?: SeriesLabelOption & {
+        position?: 'inside'
+    }
 }
 
-class SankeySeriesModel extends SeriesModel<SankeySeriesOption> {
-    static readonly type = 'series.sankey';
+export const SERIES_TYPE_SANKEY = 'sankey';
+
+class SankeySeriesModel extends SeriesModel<SankeySeriesOption> implements RoamHostModel {
+    static readonly type = 'series.' + SERIES_TYPE_SANKEY;
     readonly type = SankeySeriesModel.type;
+
+    static layoutMode = 'box' as const;
+
+    coordinateSystem: View;
 
     levelModels: Model<SankeyLevelOption>[];
 
@@ -151,9 +176,9 @@ class SankeySeriesModel extends SeriesModel<SankeySeriesOption> {
      * Init a graph data structure from data in option series
      */
     getInitialData(option: SankeySeriesOption, ecModel: GlobalModel) {
-        const links = option.edges || option.links;
-        const nodes = option.data || option.nodes;
-        const levels = option.levels;
+        const links = option.edges || option.links || [];
+        const nodes = option.data || option.nodes || [];
+        const levels = option.levels || [];
         this.levelModels = [];
         const levelModels = this.levelModels;
 
@@ -167,10 +192,10 @@ class SankeySeriesModel extends SeriesModel<SankeySeriesOption> {
                 }
             }
         }
-        if (nodes && links) {
-            const graph = createGraphFromNodeEdge(nodes, links, this, true, beforeLink);
-            return graph.data;
-        }
+
+        const graph = createGraphFromNodeEdge(nodes, links, this, true, beforeLink);
+        return graph.data;
+
         function beforeLink(nodeData: SeriesData, edgeData: SeriesData) {
             nodeData.wrapMethod('getItemModel', function (model: Model, idx: number) {
                 const seriesModel = model.parentModel as SankeySeriesModel;
@@ -272,11 +297,17 @@ class SankeySeriesModel extends SeriesModel<SankeySeriesOption> {
         return params;
     }
 
+    __ownRoamView() {
+        return this.coordinateSystem;
+    }
+
     static defaultOption: SankeySeriesOption = {
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
 
-        coordinateSystem: 'view',
+        // `coordinateSystem` can be declared as 'matrix', 'calendar',
+        //  which provides box layout container.
+        coordinateSystemUsage: 'box',
 
         left: '5%',
         top: '5%',
@@ -291,10 +322,22 @@ class SankeySeriesModel extends SeriesModel<SankeySeriesOption> {
         draggable: true,
 
         layoutIterations: 32,
+        sort: 'desc',
+
+        // true | false | 'move' | 'scale', see module:component/helper/RoamController.
+        roam: false,
+        roamTrigger: 'global',
+        center: null,
+        zoom: 1,
 
         label: {
             show: true,
             position: 'right',
+            fontSize: 12
+        },
+
+        edgeLabel: {
+            show: false,
             fontSize: 12
         },
 
@@ -303,7 +346,7 @@ class SankeySeriesModel extends SeriesModel<SankeySeriesOption> {
         nodeAlign: 'justify',
 
         lineStyle: {
-            color: '#314656',
+            color: tokens.color.neutral50,
             opacity: 0.2,
             curveness: 0.5
         },
@@ -319,7 +362,7 @@ class SankeySeriesModel extends SeriesModel<SankeySeriesOption> {
 
         select: {
             itemStyle: {
-                borderColor: '#212121'
+                borderColor: tokens.color.primary
             }
         },
 

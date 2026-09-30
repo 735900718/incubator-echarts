@@ -43,7 +43,8 @@ import {
     map,
     curry,
     filter,
-    HashMap
+    HashMap,
+    isNumber
 } from 'zrender/src/core/util';
 import { makeInner } from '../../util/model';
 import { LineDataVisual } from '../../visual/commonVisualTypes';
@@ -112,7 +113,7 @@ const markLineTransform = function (
             mlTo.coord[baseIndex] = Infinity;
 
             const precision = mlModel.get('precision');
-            if (precision >= 0 && typeof value === 'number') {
+            if (precision >= 0 && isNumber(value)) {
                 value = +value.toFixed(Math.min(precision, 20));
             }
 
@@ -153,7 +154,7 @@ const markLineTransform = function (
     return normalizedItem;
 };
 
-function isInifinity(val: ScaleDataValue) {
+function isInfinity(val: ScaleDataValue) {
     return !isNaN(val as number) && !isFinite(val as number);
 }
 
@@ -166,7 +167,7 @@ function ifMarkLineHasOnlyDim(
 ) {
     const otherDimIndex = 1 - dimIndex;
     const dimName = coordSys.dimensions[dimIndex];
-    return isInifinity(fromCoord[otherDimIndex]) && isInifinity(toCoord[otherDimIndex])
+    return isInfinity(fromCoord[otherDimIndex]) && isInfinity(toCoord[otherDimIndex])
         && fromCoord[dimIndex] === toCoord[dimIndex] && coordSys.getAxis(dimName).containData(fromCoord[dimIndex]);
 }
 
@@ -214,7 +215,7 @@ function updateSingleMarkerEndLayout(
     else {
         // Chart like bar may have there own marker positioning logic
         if (seriesModel.getMarkerPosition) {
-            // Use the getMarkerPoisition
+            // Use the getMarkerPosition
             point = seriesModel.getMarkerPosition(
                 data.getValues(data.dimensions, idx)
             );
@@ -239,10 +240,10 @@ function updateSingleMarkerEndLayout(
             const xAxis = coordSys.getAxis('x') as Axis2D;
             const yAxis = coordSys.getAxis('y') as Axis2D;
             const dims = coordSys.dimensions;
-            if (isInifinity(data.get(dims[0], idx))) {
+            if (isInfinity(data.get(dims[0], idx))) {
                 point[0] = xAxis.toGlobalCoord(xAxis.getExtent()[isFrom ? 0 : 1]);
             }
-            else if (isInifinity(data.get(dims[1], idx))) {
+            else if (isInfinity(data.get(dims[1], idx))) {
                 point[1] = yAxis.toGlobalCoord(yAxis.getExtent()[isFrom ? 0 : 1]);
             }
         }
@@ -348,8 +349,8 @@ class MarkLineView extends MarkerView {
 
         // Update visual and layout of line
         lineData.each(function (idx) {
-            const lineStyle = lineData.getItemModel<MarkLineMergedItemOption>(idx)
-                .getModel('lineStyle').getLineStyle();
+            const itemModel = lineData.getItemModel<MarkLineMergedItemOption>(idx);
+            const lineStyle = itemModel.getModel('lineStyle').getLineStyle();
             // lineData.setItemVisual(idx, {
             //     color: lineColor || fromData.getItemVisual(idx, 'color')
             // });
@@ -357,12 +358,14 @@ class MarkLineView extends MarkerView {
                 fromData.getItemLayout(idx),
                 toData.getItemLayout(idx)
             ]);
+            const z2 = itemModel.get('z2');
 
             if (lineStyle.stroke == null) {
                 lineStyle.stroke = fromData.getItemVisual(idx, 'style').fill;
             }
 
             lineData.setItemVisual(idx, {
+                z2: retrieve2(z2, 0),
                 fromSymbolKeepAspect: fromData.getItemVisual(idx, 'symbolKeepAspect'),
                 fromSymbolOffset: fromData.getItemVisual(idx, 'symbolOffset'),
                 fromSymbolRotate: fromData.getItemVisual(idx, 'symbolRotate'),
@@ -381,7 +384,9 @@ class MarkLineView extends MarkerView {
 
         // Set host model for tooltip
         // FIXME
-        mlData.line.eachItemGraphicEl(function (el, idx) {
+        mlData.line.eachItemGraphicEl(function (el) {
+            getECData(el).dataModel = mlModel;
+
             el.traverse(function (child) {
                 getECData(child).dataModel = mlModel;
             });
@@ -438,14 +443,15 @@ function createList(coordSys: CoordinateSystem, seriesModel: SeriesModel, mlMode
     let coordDimsInfos: SeriesDimensionDefine[];
     if (coordSys) {
         coordDimsInfos = map(coordSys && coordSys.dimensions, function (coordDim) {
-            const info = seriesModel.getData().getDimensionInfo(
-                seriesModel.getData().mapDimension(coordDim)
-            ) || {};
+            const data = seriesModel.getData();
+            const info = data.getDimensionInfo(
+                data.mapDimension(coordDim)
+            ) || {} as SeriesDimensionDefine;
             // In map series data don't have lng and lat dimension. Fallback to same with coordSys
             return extend(extend({}, info), {
                 name: coordDim,
                 // DON'T use ordinalMeta to parse and collect ordinal.
-                ordinalMeta: null
+                ordinalMeta: null,
             });
         });
     }

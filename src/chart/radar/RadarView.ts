@@ -18,11 +18,11 @@
 */
 
 import * as graphic from '../../util/graphic';
-import { setStatesStylesFromModel, enableHoverEmphasis } from '../../util/states';
+import { setStatesStylesFromModel, toggleHoverEmphasis } from '../../util/states';
 import * as zrUtil from 'zrender/src/core/util';
 import * as symbolUtil from '../../util/symbol';
 import ChartView from '../../view/Chart';
-import RadarSeriesModel, { RadarSeriesDataItemOption } from './RadarSeries';
+import RadarSeriesModel, { RadarSeriesDataItemOption, SERIES_TYPE_RADAR } from './RadarSeries';
 import ExtensionAPI from '../../core/ExtensionAPI';
 import SeriesData from '../../data/SeriesData';
 import { ColorString } from '../../util/types';
@@ -30,15 +30,15 @@ import GlobalModel from '../../model/Global';
 import { VectorArray } from 'zrender/src/core/vector';
 import { setLabelStyle, getLabelStatesModels } from '../../label/labelStyle';
 import ZRImage from 'zrender/src/graphic/Image';
-import { saveOldStyle } from '../../animation/basicTrasition';
+import { saveOldStyle } from '../../animation/basicTransition';
 
 type RadarSymbol = ReturnType<typeof symbolUtil.createSymbol> & {
     __dimIdx: number
 };
 
 class RadarView extends ChartView {
-    static type = 'radar';
-    type = RadarView.type;
+    static readonly type = SERIES_TYPE_RADAR;
+    readonly type = SERIES_TYPE_RADAR;
 
     private _data: SeriesData<RadarSeriesModel>;
 
@@ -211,11 +211,19 @@ class RadarView extends ChartView {
                 const stateIgnore = stateModel.isEmpty() && stateModel.parentModel.isEmpty();
                 // Won't be ignore if normal state is not ignore.
                 polygon.ensureState(stateName).ignore = stateIgnore && polygonIgnore;
+                const lineStyle = itemModel.getModel([stateName, 'lineStyle']).getLineStyle();
+                polyline.ensureState(stateName).style = lineStyle;
+                const areaStyle = stateModel.getAreaStyle();
+                polygon.ensureState(stateName).style = areaStyle;
+                const itemStateStyle = itemModel.getModel([stateName, 'itemStyle']).getItemStyle();
+                symbolGroup.eachChild(function (symbolPath: RadarSymbol) {
+                    symbolPath.ensureState(stateName).style = zrUtil.clone(itemStateStyle);
+                });
             });
 
             polygon.useStyle(
                 zrUtil.defaults(
-                    areaStyleModel.getAreaStyle(),
+                    itemModel.getModel('areaStyle').getAreaStyle(),
                     {
                         fill: color,
                         opacity: 0.7,
@@ -224,7 +232,6 @@ class RadarView extends ChartView {
                 )
             );
             const emphasisModel = itemModel.getModel('emphasis');
-            const itemHoverStyle = emphasisModel.getModel('itemStyle').getItemStyle();
             symbolGroup.eachChild(function (symbolPath: RadarSymbol) {
                 if (symbolPath instanceof ZRImage) {
                     const pathStyle = symbolPath.style;
@@ -241,8 +248,6 @@ class RadarView extends ChartView {
                     symbolPath.style.strokeNoScale = true;
                 }
 
-                const pathEmphasisState = symbolPath.ensureState('emphasis');
-                pathEmphasisState.style = zrUtil.clone(itemHoverStyle);
                 let defaultText = data.getStore().get(data.getDimensionIndex(symbolPath.__dimIdx), idx);
                 (defaultText == null || isNaN(defaultText as number)) && (defaultText = '');
 
@@ -259,7 +264,9 @@ class RadarView extends ChartView {
                 );
             });
 
-            enableHoverEmphasis(itemGroup, emphasisModel.get('focus'), emphasisModel.get('blurScope'));
+            toggleHoverEmphasis(
+                itemGroup, emphasisModel.get('focus'), emphasisModel.get('blurScope'), emphasisModel.get('disabled')
+            );
         });
 
         this._data = data;

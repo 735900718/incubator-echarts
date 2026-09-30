@@ -21,19 +21,20 @@ import { parsePercent } from '../../util/number';
 import * as zrUtil from 'zrender/src/core/util';
 import GlobalModel from '../../model/Global';
 import ExtensionAPI from '../../core/ExtensionAPI';
-import SunburstSeriesModel, { SunburstSeriesNodeItemOption, SunburstSeriesOption } from './SunburstSeries';
+import SunburstSeriesModel, { SERIES_TYPE_SUNBURST, SunburstSeriesOption } from './SunburstSeries';
 import { TreeNode } from '../../data/Tree';
-import SeriesModel from '../../model/Series';
+import { createSimpleOverallStageHandler } from '../../util/model';
 
 // let PI2 = Math.PI * 2;
 const RADIAN = Math.PI / 180;
 
-export default function sunburstLayout(
-    seriesType: 'sunburst',
+export const sunburstLayoutStageHandler = createSimpleOverallStageHandler(SERIES_TYPE_SUNBURST, sunburstLayout);
+
+function sunburstLayout(
     ecModel: GlobalModel,
     api: ExtensionAPI
 ) {
-    ecModel.eachSeriesByType(seriesType, function (seriesModel: SunburstSeriesModel) {
+    ecModel.eachSeriesByType(SERIES_TYPE_SUNBURST, function (seriesModel: SunburstSeriesModel) {
         let center = seriesModel.get('center');
         let radius = seriesModel.get('radius');
 
@@ -124,7 +125,7 @@ export default function sunburstLayout(
                 if (levelModel) {
                     let r0 = levelModel.get('r0', true);
                     let r = levelModel.get('r', true);
-                    let radius = levelModel.get('radius', true);
+                    const radius = levelModel.get('radius', true);
 
                     if (radius != null) {
                         r0 = radius[0];
@@ -205,7 +206,7 @@ function initChildren(node: TreeNode, sortOrder?: SunburstSeriesOption['sort']) 
  *                                   See SunburstSeries.js for details.
  */
 function sort(children: TreeNode[], sortOrder: SunburstSeriesOption['sort']) {
-    if (typeof sortOrder === 'function') {
+    if (zrUtil.isFunction(sortOrder)) {
         const sortTargets = zrUtil.map(children, (child, idx) => {
             const value = child.getValue() as number;
             return {

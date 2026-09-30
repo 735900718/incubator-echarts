@@ -31,7 +31,10 @@ import {
     StatesOptionMixin,
     OptionDataItemObject,
     CallbackDataParams,
-    DefaultEmphasisFocus
+    DefaultEmphasisFocus,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
+    RoamHostModel
 } from '../../util/types';
 import SeriesData from '../../data/SeriesData';
 import View from '../../coord/View';
@@ -39,6 +42,7 @@ import { LayoutRect } from '../../util/layout';
 import Model from '../../model/Model';
 import { createTooltipMarkup } from '../../component/tooltip/tooltipMarkup';
 import { wrapTreePathInfo } from '../helper/treeHelper';
+import tokens from '../../visual/tokens';
 
 interface CurveLineStyleOption extends LineStyleOption{
     curveness?: number
@@ -55,7 +59,7 @@ export interface TreeSeriesStateOption<TCbParams = never> {
 
 interface TreeStatesMixin {
     emphasis?: {
-        focus?: DefaultEmphasisFocus | 'ancestor' | 'descendant'
+        focus?: DefaultEmphasisFocus | 'ancestor' | 'descendant' | 'relative'
         scale?: boolean
     }
 }
@@ -82,7 +86,8 @@ export interface TreeSeriesLeavesOption
 
 export interface TreeSeriesOption extends
     SeriesOption<TreeSeriesStateOption, TreeStatesMixin>, TreeSeriesStateOption,
-    SymbolOptionMixin, BoxLayoutOptionMixin, RoamOptionMixin {
+    ComponentOnCalendarOptionMixin, ComponentOnMatrixOptionMixin,
+    SymbolOptionMixin<CallbackDataParams>, BoxLayoutOptionMixin, RoamOptionMixin {
     type?: 'tree'
 
     layout?: 'orthogonal' | 'radial'
@@ -93,8 +98,6 @@ export interface TreeSeriesOption extends
      * Available when edgeShape is polyline
      */
     edgeForkPosition?: string | number
-
-    nodeScaleRatio?: number
 
     /**
      * The orient of orthoginal layout, can be setted to 'LR', 'TB', 'RL', 'BT'.
@@ -121,11 +124,15 @@ export interface TreeAncestors {
 }
 
 export interface TreeSeriesCallbackDataParams extends CallbackDataParams {
+    collapsed: boolean;
     treeAncestors?: TreeAncestors[]
 }
 
-class TreeSeriesModel extends SeriesModel<TreeSeriesOption> {
-    static readonly type = 'series.tree';
+export const SERIES_TYPE_TREE = 'tree';
+
+class TreeSeriesModel extends SeriesModel<TreeSeriesOption> implements RoamHostModel {
+    static readonly type = 'series.' + SERIES_TYPE_TREE;
+    readonly type = TreeSeriesModel.type;
 
     // can support the position parameters 'left', 'top','right','bottom', 'width',
     // 'height' in the setOption() with 'merge' mode normal.
@@ -145,7 +152,7 @@ class TreeSeriesModel extends SeriesModel<TreeSeriesOption> {
      */
     getInitialData(option: TreeSeriesOption): SeriesData {
 
-        //create an virtual root
+        // create a virtual root
         const root: TreeSeriesNodeItemOption = {
             name: option.name,
             children: option.data
@@ -204,14 +211,6 @@ class TreeSeriesModel extends SeriesModel<TreeSeriesOption> {
         return orient;
     }
 
-    setZoom(zoom: number) {
-        this.option.zoom = zoom;
-    }
-
-    setCenter(center: number[]) {
-        this.option.center = center;
-    }
-
     formatTooltip(
         dataIndex: number,
         multipleSeries: boolean,
@@ -240,14 +239,22 @@ class TreeSeriesModel extends SeriesModel<TreeSeriesOption> {
 
         const node = this.getData().tree.getNodeByDataIndex(dataIndex);
         params.treeAncestors = wrapTreePathInfo(node, this);
+        params.collapsed = !node.isExpand;
 
         return params;
     }
 
+    __ownRoamView() {
+        return this.coordinateSystem;
+    }
+
     static defaultOption: TreeSeriesOption = {
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
-        coordinateSystem: 'view',
+
+        // `coordinateSystem` can be declared as 'matrix', 'calendar',
+        //  which provides box layout container.
+        coordinateSystemUsage: 'box',
 
         // the position of the whole view
         left: '12%',
@@ -265,6 +272,7 @@ class TreeSeriesModel extends SeriesModel<TreeSeriesOption> {
 
         // true | false | 'move' | 'scale', see module:component/helper/RoamController.
         roam: false,
+        roamTrigger: 'global',
 
         // Symbol size scale ratio in roam
         nodeScaleRatio: 0.4,
@@ -285,7 +293,7 @@ class TreeSeriesModel extends SeriesModel<TreeSeriesOption> {
         initialTreeDepth: 2,
 
         lineStyle: {
-            color: '#ccc',
+            color: tokens.color.borderTint,
             width: 1.5,
             curveness: 0.5
         },

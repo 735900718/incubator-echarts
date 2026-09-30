@@ -54,6 +54,7 @@ function hasXAndY(item: MarkerPositionOption) {
 function markerTypeCalculatorWithExtent(
     markerType: MarkerStatisticType,
     data: SeriesData,
+    axisDim: string,
     otherDataDim: string,
     targetDataDim: string,
     otherCoordIndex: number,
@@ -61,14 +62,20 @@ function markerTypeCalculatorWithExtent(
 ): [ParsedValue[], ParsedValue] {
     const coordArr: ParsedValue[] = [];
 
-    const stacked = isDimensionStacked(data, targetDataDim /*, otherDataDim*/);
+    const stacked = isDimensionStacked(data, targetDataDim /* , otherDataDim */);
     const calcDataDim = stacked
         ? data.getCalculationInfo('stackResultDimension')
         : targetDataDim;
 
     const value = numCalculate(data, calcDataDim, markerType);
 
-    const dataIndex = data.indicesOfNearest(calcDataDim, value)[0];
+    const seriesModel = data.hostModel as SeriesModel;
+    const dataIndex = seriesModel.indicesOfNearest(
+        axisDim,
+        calcDataDim,
+        value
+    )[0];
+
     coordArr[otherCoordIndex] = data.get(otherDataDim, dataIndex);
     coordArr[targetCoordIndex] = data.get(calcDataDim, dataIndex);
     const coordArrValue = data.get(targetDataDim, dataIndex);
@@ -99,16 +106,20 @@ export function dataTransform(
     seriesModel: SeriesModel,
     item: MarkerPositionOption
 ) {
+    if (!item) {
+        return;
+    }
+
     const data = seriesModel.getData();
     const coordSys = seriesModel.coordinateSystem;
+    const dims = coordSys && coordSys.dimensions;
 
     // 1. If not specify the position with pixel directly
     // 2. If `coord` is not a data array. Which uses `xAxis`,
     // `yAxis` to specify the coord on each dimension
 
     // parseFloat first because item.x and item.y can be percent string like '20%'
-    if (item && !hasXAndY(item) && !isArray(item.coord) && coordSys) {
-        const dims = coordSys.dimensions;
+    if (!hasXAndY(item) && !isArray(item.coord) && isArray(dims)) {
         const axisInfo = getAxisInfo(item, data, coordSys, seriesModel);
 
         // Clone the option
@@ -123,28 +134,40 @@ export function dataTransform(
             const targetCoordIndex = indexOf(dims, axisInfo.valueAxis.dim);
 
             const coordInfo = markerTypeCalculator[item.type](
-                data, axisInfo.baseDataDim, axisInfo.valueDataDim,
+                data, axisInfo.valueAxis.dim, axisInfo.baseDataDim, axisInfo.valueDataDim,
                 otherCoordIndex, targetCoordIndex
             );
             item.coord = coordInfo[0];
             // Force to use the value of calculated value.
             // let item use the value without stack.
             item.value = coordInfo[1];
-
         }
         else {
             // FIXME Only has one of xAxis and yAxis.
-            const coord = [
+            item.coord = [
                 item.xAxis != null ? item.xAxis : item.radiusAxis,
                 item.yAxis != null ? item.yAxis : item.angleAxis
             ];
-            // Each coord support max, min, average
-            for (let i = 0; i < 2; i++) {
-                if (markerTypeCalculator[coord[i] as MarkerStatisticType]) {
-                    coord[i] = numCalculate(data, data.mapDimension(dims[i]), coord[i] as MarkerStatisticType);
-                }
+        }
+    }
+    // x y is provided
+    if (item.coord == null || !isArray(dims)) {
+        item.coord = [];
+        const baseAxis = seriesModel.getBaseAxis();
+        if (baseAxis && item.type && markerTypeCalculator[item.type]) {
+            const otherAxis = coordSys.getOtherAxis(baseAxis);
+            if (otherAxis) {
+                item.value = numCalculate(data, data.mapDimension(otherAxis.dim), item.type);
             }
-            item.coord = coord;
+        }
+    }
+    else {
+        // Each coord support max, min, average
+        const coord = item.coord;
+        for (let i = 0; i < 2; i++) {
+            if (markerTypeCalculator[coord[i] as MarkerStatisticType]) {
+                coord[i] = numCalculate(data, data.mapDimension(dims[i]), coord[i] as MarkerStatisticType);
+            }
         }
     }
     return item;
@@ -191,9 +214,22 @@ export function dataFilter(
     },
     item: MarkerPositionOption
 ) {
-    // Alwalys return true if there is no coordSys
+    // Always return true if there is no coordSys
     return (coordSys && coordSys.containData && item.coord && !hasXOrY(item))
         ? coordSys.containData(item.coord) : true;
+}
+
+export function zoneFilter(
+    // Currently only polar and cartesian has containData.
+    coordSys: CoordinateSystem & {
+        containZone?(data1: ScaleDataValue[], data2: ScaleDataValue[]): boolean
+    },
+    item1: MarkerPositionOption,
+    item2: MarkerPositionOption
+) {
+    // Always return true if there is no coordSys
+    return (coordSys && coordSys.containZone && item1.coord && item2.coord && !hasXOrY(item1) && !hasXOrY(item2))
+        ? coordSys.containZone(item1.coord, item2.coord) : true;
 }
 
 export function createMarkerDimValueGetter(

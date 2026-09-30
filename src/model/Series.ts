@@ -29,7 +29,9 @@ import {
     SeriesDataType,
     SeriesEncodeOptionMixin,
     OptionEncodeValue,
-    ColorBy
+    ColorBy,
+    StatesOptionMixin,
+    DimensionLoose,
 } from '../util/types';
 import ComponentModel, { ComponentModelConstructor } from './Component';
 import {PaletteMixin} from './mixin/palette';
@@ -44,7 +46,7 @@ import {createTask} from '../core/task';
 import GlobalModel from './Global';
 import { CoordinateSystem } from '../coord/CoordinateSystem';
 import { ExtendableConstructor, mountExtend, Constructor } from '../util/clazz';
-import { PipelineContext, SeriesTaskContext, GeneralTask, OverallTask, SeriesTask } from '../core/Scheduler';
+import { PipelineContext, SeriesTaskContext, GeneralTask, OverallTask, SeriesTask, Pipeline } from '../core/Scheduler';
 import LegendVisualProvider from '../visual/LegendVisualProvider';
 import SeriesData from '../data/SeriesData';
 import Axis from '../coord/Axis';
@@ -56,6 +58,9 @@ import { defaultSeriesFormatTooltip } from '../component/tooltip/seriesFormatToo
 import {ECSymbol} from '../util/symbol';
 import {Group} from '../util/graphic';
 import {LegendIconParams} from '../component/legend/LegendModel';
+import {dimPermutations} from '../component/marker/MarkAreaView';
+import type ChartView from '../view/Chart';
+
 
 const inner = modelUtil.makeInner<{
     data: SeriesData
@@ -69,12 +74,30 @@ function getSelectionKey(data: SeriesData, dataIndex: number): string {
 
 export const SERIES_UNIVERSAL_TRANSITION_PROP = '__universalTransitionEnabled';
 
+/**
+ * NOTICE:
+ *  - prefix `__` can be used to avoid conflicts with possible outside subclasses.
+ *  - All of these methods are optional - null-check is needed.
+ */
 interface SeriesModel {
-    /**
-     * Convinient for override in extended class.
-     * Implement it if needed.
-     */
+
     preventIncremental(): boolean;
+
+    __preparePipelineContext(
+        view: ChartView,
+        pipeline: Pick<Pipeline, 'progressiveEnabled' | 'threshold'>
+    ): PipelineContext;
+
+    /**
+     * If `true`, a default `startValue` (`0`) is used if not specified in ec option,
+     * and axis extent will union it.
+     * Otherwise, `startValue` will be included in the union of axis extent only if
+     * it is explicitly specified in ec option.
+     *
+     * @see {AxisBaseOptionCommon['startValue']} for more info.
+     */
+    __requireStartValue(axis: Axis): boolean;
+
     /**
      * See tooltip.
      * Implement it if needed.
@@ -98,7 +121,11 @@ interface SeriesModel {
     /**
      * Get position for marker
      */
-    getMarkerPosition(value: ScaleDataValue[]): number[];
+    getMarkerPosition(
+        value: ScaleDataValue[],
+        dims?: typeof dimPermutations[number],
+        startingAtTick?: boolean
+    ): number[];
 
     /**
      * Get legend icon symbol according to each series type
@@ -121,7 +148,7 @@ interface SeriesModel {
 
 class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentModel<Opt> {
 
-    // [Caution]: Becuase this class or desecendants can be used as `XXX.extend(subProto)`,
+    // [Caution]: Because this class or desecendants can be used as `XXX.extend(subProto)`,
     // the class members must not be initialized in constructor or declaration place.
     // Otherwise there is bad case:
     //   class A {xxx = 1;}
@@ -134,18 +161,20 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
     // @readonly
     type: string;
 
-    // Should be implenented in subclass.
+    // Should be impleneted in subclass.
     defaultOption: SeriesOption;
 
     // @readonly
     seriesIndex: number;
 
-    // coodinateSystem will be injected in the echarts/CoordinateSystem
+    // Will be injected.
+    // @see `injectCoordinateSystem`
     coordinateSystem: CoordinateSystem;
 
     // Injected outside
     dataTask: SeriesTask;
     // Injected outside
+    // CAUTION: Can read from it; but never write to it!
     pipelineContext: PipelineContext;
 
     // ---------------------------------------
@@ -178,7 +207,6 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
     // Props about data selection
     // ---------------------------------------
     private _selectedDataIndicesMap: Dictionary<number> = {};
-
     readonly preventUsingHoverLayer: boolean;
 
     static protoInitialize = (function () {
@@ -315,7 +343,7 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
 
     /**
      * Init a data structure from data related option in series
-     * Must be overriden.
+     * Must be overridden.
      */
     getInitialData(option: Opt, ecModel: GlobalModel): SeriesData {
         return;
@@ -342,7 +370,7 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
         const task = getCurrentTask(this);
         if (task) {
             const data = task.context.data;
-            return (dataType == null ? data : data.getLinkedData(dataType)) as SeriesData<this>;
+            return (dataType == null || !data.getLinkedData ? data : data.getLinkedData(dataType)) as SeriesData<this>;
         }
         else {
             // When series is not alive (that may happen when click toolbox
@@ -422,13 +450,73 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
     /**
      * Get base axis if has coordinate system and has axis.
      * By default use coordSys.getBaseAxis();
-     * Can be overrided for some chart.
+     * Can be overridden for some chart.
      * @return {type} description
      */
     getBaseAxis(): Axis {
         const coordSys = this.coordinateSystem;
-        // @ts-ignore
         return coordSys && coordSys.getBaseAxis && coordSys.getBaseAxis();
+    }
+
+    /**
+     * Retrieve the index of nearest value in the view coordinate.
+     * Data position is compared with each axis's dataToCoord.
+     *
+     * @param axisDim axis dimension
+     * @param dim data dimension
+     * @param value
+     * @param [maxDistance=Infinity] The maximum distance in view coordinate space
+     * @return If and only if multiple indices has
+     *         the same value, they are put to the result.
+     */
+    indicesOfNearest(axisDim: DimensionName, dim: DimensionLoose, value: number, maxDistance?: number): number[] {
+        const data = this.getData();
+        const coordSys = this.coordinateSystem;
+        const axis = coordSys && coordSys.getAxis(axisDim);
+        if (!coordSys || !axis) {
+            return [];
+        }
+        const targetCoord = axis.dataToCoord(value);
+
+        if (maxDistance == null) {
+            maxDistance = Infinity;
+        }
+
+        const nearestIndices: number[] = [];
+        let minDist = Infinity;
+        let minDiff = -1;
+        let nearestIndicesLen = 0;
+
+        // Performance-sensitive on large data (triggered by `tooltip`/`axisPointer` frequently).
+        const dimIdx = data.getDimensionIndex(dim);
+        const store = data.getStore();
+        for (let idx = 0, len = store.count(); idx < len; idx++) {
+            const dimValue = store.get(dimIdx, idx);
+            const dataCoord = axis.dataToCoord(dimValue);
+            const diff = targetCoord - dataCoord;
+            const dist = Math.abs(diff);
+            if (dist <= maxDistance) {
+                // When the `value` is at the middle of `this.get(dim, i)` and `this.get(dim, i+1)`,
+                // we'd better not push both of them to `nearestIndices`, otherwise it is easy to
+                // get more than one item in `nearestIndices` (more specifically, in `tooltip`).
+                // So we choose the one that `diff >= 0` in this case.
+                // But if `this.get(dim, i)` and `this.get(dim, j)` get the same value, both of them
+                // should be push to `nearestIndices`.
+                if (dist < minDist
+                    || (dist === minDist && diff >= 0 && minDiff < 0)
+                ) {
+                    minDist = dist;
+                    minDiff = diff;
+                    nearestIndicesLen = 0;
+                }
+                if (diff === minDiff) {
+                    nearestIndices[nearestIndicesLen++] = idx;
+                }
+            }
+        }
+
+        nearestIndices.length = nearestIndicesLen;
+        return nearestIndices;
     }
 
     /**
@@ -458,7 +546,10 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
     }
 
     isAnimationEnabled(): boolean {
-        if (env.node) {
+        const ecModel = this.ecModel;
+        // Disable animation if using echarts in node but not give ssr flag.
+        // In ssr mode, renderToString will generate svg with css animation.
+        if (env.node && !(ecModel && ecModel.ssr)) {
             return false;
         }
         let animationEnabled = this.getShallow('animation');
@@ -471,6 +562,7 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
     }
 
     restoreData() {
+        // See `dataTaskReset`.
         this.dataTask.dirty();
     }
 
@@ -516,7 +608,15 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
         if (!selectedMap) {
             return;
         }
+        const selectedMode = this.option.selectedMode;
+
         const data = this.getData(dataType);
+        if (selectedMode === 'series' || selectedMap === 'all') {
+            this.option.selectedMap = {};
+            this._selectedDataIndicesMap = {};
+            return;
+        }
+
         for (let i = 0; i < innerDataIndices.length; i++) {
             const dataIndex = innerDataIndices[i];
             const nameOrId = getSelectionKey(data, dataIndex);
@@ -536,6 +636,9 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
     }
 
     getSelectedDataIndices(): number[] {
+        if (this.option.selectedMap === 'all') {
+            return [].slice.call(this.getData().getIndices());
+        }
         const selectedDataIndicesMap = this._selectedDataIndicesMap;
         const nameOrIds = zrUtil.keys(selectedDataIndicesMap);
         const dataIndices = [];
@@ -555,8 +658,9 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
         }
 
         const data = this.getData(dataType);
-        const nameOrId = getSelectionKey(data, dataIndex);
-        return selectedMap[nameOrId] || false;
+
+        return (selectedMap === 'all' || selectedMap[getSelectionKey(data, dataIndex)])
+            && !data.getItemModel<StatesOptionMixin<unknown, unknown>>(dataIndex).get(['select', 'disabled']);
     }
 
     isUniversalTransitionEnabled(): boolean {
@@ -579,17 +683,24 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
     }
 
     private _innerSelect(data: SeriesData, innerDataIndices: number[]) {
-        const selectedMode = this.option.selectedMode;
+        const option = this.option;
+        const selectedMode = option.selectedMode;
         const len = innerDataIndices.length;
         if (!selectedMode || !len) {
             return;
         }
 
-        if (selectedMode === 'multiple') {
-            const selectedMap = this.option.selectedMap || (this.option.selectedMap = {});
+        if (selectedMode === 'series') {
+            option.selectedMap = 'all';
+        }
+        else if (selectedMode === 'multiple') {
+            if (!zrUtil.isObject(option.selectedMap)) {
+                option.selectedMap = {};
+            }
+            const selectedMap = option.selectedMap;
             for (let i = 0; i < len; i++) {
                 const dataIndex = innerDataIndices[i];
-                // TODO diffrent types of data share same object.
+                // TODO different types of data share same object.
                 const nameOrId = getSelectionKey(data, dataIndex);
                 selectedMap[nameOrId] = true;
                 this._selectedDataIndicesMap[nameOrId] = data.getRawIndex(dataIndex);
@@ -598,7 +709,7 @@ class SeriesModel<Opt extends SeriesOption = SeriesOption> extends ComponentMode
         else if (selectedMode === 'single' || selectedMode === true) {
             const lastDataIndex = innerDataIndices[len - 1];
             const nameOrId = getSelectionKey(data, lastDataIndex);
-            this.option.selectedMap = {
+            option.selectedMap = {
                 [nameOrId]: true
             };
             this._selectedDataIndicesMap = {
@@ -691,7 +802,7 @@ function dataTaskReset(context: SeriesTaskContext) {
 }
 
 function dataTaskProgress(param: StageHandlerProgressParams, context: SeriesTaskContext): void {
-    // Avoid repead cloneShallow when data just created in reset.
+    // Avoid repeat cloneShallow when data just created in reset.
     if (context.outputData && param.end > context.outputData.count()) {
         context.model.getRawData().cloneShallow(context.outputData);
     }

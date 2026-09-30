@@ -27,7 +27,7 @@ import {
     SeriesSamplingOptionMixin,
     SeriesLabelOption,
     SeriesEncodeOptionMixin,
-    DefaultStatesMixinEmpasis,
+    DefaultStatesMixinEmphasis,
     CallbackDataParams
 } from '../../util/types';
 import type Cartesian2D from '../../coord/cartesian/Cartesian2D';
@@ -36,12 +36,19 @@ import type Polar from '../../coord/polar/Polar';
 import { inheritDefaultOption } from '../../util/component';
 import SeriesData from '../../data/SeriesData';
 import { BrushCommonSelectorsForSeries } from '../../component/brush/selector';
+import tokens from '../../visual/tokens';
+import { preparePipelineContext } from '../../util/model';
+import type { Pipeline } from '../../core/Scheduler';
+import type ChartView from '../../view/Chart';
+import { SERIES_TYPE_BAR } from '../../layout/barCommon';
 
-export type PolarBarLabelPosition = SeriesLabelOption['position']
-    | 'start' | 'insideStart' | 'middle' | 'end' | 'insideEnd';
+type PolarBarLabelPositionExtra = 'start' | 'insideStart' | 'middle' | 'end' | 'insideEnd';
+export type PolarBarLabelPosition = SeriesLabelOption['position'] | PolarBarLabelPositionExtra;
 
-export type BarSeriesLabelOption = Omit<SeriesLabelOption, 'position'>
-    & {position?: PolarBarLabelPosition | 'outside'};
+export type BarSeriesLabelOption = SeriesLabelOption<
+    CallbackDataParams,
+    {positionExtra: PolarBarLabelPositionExtra | 'outside'}
+>;
 
 export interface BarStateOption<TCbParams = never> {
     itemStyle?: BarItemStyleOption<TCbParams>
@@ -49,12 +56,12 @@ export interface BarStateOption<TCbParams = never> {
 }
 
 interface BarStatesMixin {
-    emphasis?: DefaultStatesMixinEmpasis
+    emphasis?: DefaultStatesMixinEmphasis
 }
 
 export interface BarItemStyleOption<TCbParams = never> extends ItemStyleOption<TCbParams> {
-    // Border radius is not supported for bar on polar
-    borderRadius?: number | number[]
+    // for polar bars, this is used for sector's cornerRadius
+    borderRadius?: (number | string)[] | number | string
 }
 export interface BarDataItemOption extends BarStateOption,
     StatesOptionMixin<BarStateOption, BarStatesMixin>,
@@ -91,7 +98,7 @@ export interface BarSeriesOption
 }
 
 class BarSeriesModel extends BaseBarSeriesModel<BarSeriesOption> {
-    static type = 'series.bar';
+    static type = 'series.' + SERIES_TYPE_BAR;
     type = BarSeriesModel.type;
 
     static dependencies = ['grid', 'polar'];
@@ -116,16 +123,18 @@ class BarSeriesModel extends BaseBarSeriesModel<BarSeriesOption> {
     }
 
     /**
-     * @override
+     * @implement
      */
-    getProgressiveThreshold() {
+    __preparePipelineContext(
+        view: ChartView,
+        pipeline: Pick<Pipeline, 'progressiveEnabled' | 'threshold'>
+    ) {
+        const context = preparePipelineContext(this, view, pipeline);
         // Do not support progressive in normal mode.
-        let progressiveThreshold = this.get('progressiveThreshold');
-        const largeThreshold = this.get('largeThreshold');
-        if (largeThreshold > progressiveThreshold) {
-            progressiveThreshold = largeThreshold;
+        if (context.progressiveRender) {
+            context.large = true;
         }
-        return progressiveThreshold;
+        return context;
     }
 
     brushSelector(dataIndex: number, data: SeriesData, selectors: BrushCommonSelectorsForSeries): boolean {
@@ -155,7 +164,8 @@ class BarSeriesModel extends BaseBarSeriesModel<BarSeriesOption> {
 
         select: {
             itemStyle: {
-                borderColor: '#212121'
+                borderColor: tokens.color.primary,
+                borderWidth: 2
             }
         },
 

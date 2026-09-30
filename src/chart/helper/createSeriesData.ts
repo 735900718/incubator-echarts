@@ -23,7 +23,7 @@ import prepareSeriesDataSchema from '../../data/helper/createDimensions';
 import {getDimensionTypeByAxis} from '../../data/helper/dimensionHelper';
 import {getDataItemValue} from '../../util/model';
 import CoordinateSystem from '../../core/CoordinateSystem';
-import {getCoordSysInfoBySeries} from '../../model/referHelper';
+import {getCoordSysInfoBySeries, SeriesModelCoordSysInfo} from '../../model/referHelper';
 import { createSourceFromSeriesDataOption, Source } from '../../data/Source';
 import {enableDataStack} from '../../data/helper/dataStackHelper';
 import {makeSeriesEncodeForAxisCoordSys} from '../../data/helper/sourceHelper';
@@ -40,7 +40,7 @@ import SeriesDimensionDefine from '../../data/SeriesDimensionDefine';
 
 function getCoordSysDimDefs(
     seriesModel: SeriesModel,
-    coordSysInfo: ReturnType<typeof getCoordSysInfoBySeries>
+    coordSysInfo: SeriesModelCoordSysInfo
 ) {
     const coordSysName = seriesModel.get('coordinateSystem');
     const registeredCoordSys = CoordinateSystem.get(coordSysName);
@@ -161,6 +161,16 @@ function createSeriesData(
     const dimValueGetter =
         firstCategoryDimIndex != null
         && isNeedCompleteOrdinalData(source)
+            /**
+             * This serves this case:
+             *  var echarts_option = {
+             *      xAxis: { data: ['a', 'b', 'c'] },
+             *      yAxis: {}
+             *      series: { data: [555, 666, 777] }
+             *  };
+             * The `series.data` is completed to:
+             *  [[0, 555], [1, 666], [2, 777]]
+             */
             ? function (this: DataStore, itemOpt: any, dimName: string, dataIndex: number, dimIndex: number) {
                 // Use dataIndex as ordinal value in categoryAxis
                 return dimIndex === firstCategoryDimIndex
@@ -183,8 +193,7 @@ function createSeriesData(
 function isNeedCompleteOrdinalData(source: Source) {
     if (source.sourceFormat === SOURCE_FORMAT_ORIGINAL) {
         const sampleItem = firstDataNotNull(source.data as ArrayLike<any> || []);
-        return sampleItem != null
-            && !zrUtil.isArray(getDataItemValue(sampleItem));
+        return !zrUtil.isArray(getDataItemValue(sampleItem));
     }
 }
 

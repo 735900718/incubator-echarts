@@ -21,27 +21,28 @@
 
 import SeriesModel from '../../model/Series';
 import SeriesData from '../../data/SeriesData';
-import { concatArray, mergeAll, map } from 'zrender/src/core/util';
+import { concatArray, mergeAll, map, isNumber } from 'zrender/src/core/util';
 import CoordinateSystem from '../../core/CoordinateSystem';
 import {
     SeriesOption,
     SeriesOnCartesianOptionMixin,
     SeriesOnGeoOptionMixin,
     SeriesOnPolarOptionMixin,
-    SeriesOnCalendarOptionMixin,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
     SeriesLargeOptionMixin,
     LineStyleOption,
     OptionDataValue,
     StatesOptionMixin,
     SeriesLineLabelOption,
     DimensionDefinitionLoose,
-    DefaultStatesMixinEmpasis,
+    DefaultStatesMixinEmphasis,
     ZRColor,
     CallbackDataParams
 } from '../../util/types';
 import GlobalModel from '../../model/Global';
-import type { LineDrawModelOption } from '../helper/LineDraw';
 import { createTooltipMarkup } from '../../component/tooltip/tooltipMarkup';
+import { LineDrawModelOption } from '../helper/baseDraw';
 
 const Uint32Arr = typeof Uint32Array === 'undefined' ? Array : Uint32Array;
 const Float64Arr = typeof Float64Array === 'undefined' ? Array : Float64Array;
@@ -86,15 +87,15 @@ interface LegacyDataItemOption {
 }
 
 interface LinesStatesMixin {
-    emphasis?: DefaultStatesMixinEmpasis
+    emphasis?: DefaultStatesMixinEmphasis
 }
 export interface LinesStateOption<TCbParams = never> {
     lineStyle?: LinesLineStyleOption<(TCbParams extends never ? never : (params: TCbParams) => ZRColor) | ZRColor>
     label?: SeriesLineLabelOption
 }
 
-export interface LinesDataItemOption extends LinesStateOption<CallbackDataParams>,
-    StatesOptionMixin<LinesStateOption<CallbackDataParams>, LinesStatesMixin> {
+export interface LinesDataItemOption extends LinesStateOption,
+    StatesOptionMixin<LinesStateOption, LinesStatesMixin> {
     name?: string
 
     fromName?: string
@@ -111,9 +112,9 @@ export interface LinesDataItemOption extends LinesStateOption<CallbackDataParams
 }
 
 export interface LinesSeriesOption
-    extends SeriesOption<LinesStateOption, LinesStatesMixin>, LinesStateOption,
+    extends SeriesOption<LinesStateOption, LinesStatesMixin>, LinesStateOption<CallbackDataParams>,
     SeriesOnCartesianOptionMixin, SeriesOnGeoOptionMixin, SeriesOnPolarOptionMixin,
-    SeriesOnCalendarOptionMixin, SeriesLargeOptionMixin {
+    ComponentOnCalendarOptionMixin, ComponentOnMatrixOptionMixin, SeriesLargeOptionMixin {
 
     type?: 'lines'
 
@@ -259,7 +260,7 @@ class LinesSeriesModel extends SeriesModel<LinesSeriesOption> {
         }
         // Stored as a typed array. In format
         // Points Count(2) | x | y | x | y | Points Count(3) | x |  y | x | y | x | y |
-        if (typeof data[0] === 'number') {
+        if (isNumber(data[0])) {
             const len = data.length;
             // Store offset and len of each segment
             const coordsOffsetAndLenStorage = new Uint32Arr(len) as Uint32Array;
@@ -306,7 +307,7 @@ class LinesSeriesModel extends SeriesModel<LinesSeriesOption> {
         if (__DEV__) {
             const CoordSys = CoordinateSystem.get(option.coordinateSystem);
             if (!CoordSys) {
-                throw new Error('Unkown coordinate system ' + option.coordinateSystem);
+                throw new Error('Unknown coordinate system ' + option.coordinateSystem);
             }
         }
 
@@ -336,19 +337,31 @@ class LinesSeriesModel extends SeriesModel<LinesSeriesOption> {
         dataType: string
     ) {
         const data = this.getData();
+        const value = this.getRawValue(dataIndex);
         const itemModel = data.getItemModel<LinesDataItemOption>(dataIndex);
-        const name = itemModel.get('name');
-        if (name) {
-            return name;
+        let itemName = itemModel.get('name');
+        if (!itemName) {
+            const fromName = itemModel.get('fromName');
+            const toName = itemModel.get('toName');
+            const nameArr = [];
+            fromName != null && nameArr.push(fromName);
+            toName != null && nameArr.push(toName);
+            itemName = nameArr.join(' > ');
         }
-        const fromName = itemModel.get('fromName');
-        const toName = itemModel.get('toName');
-        const nameArr = [];
-        fromName != null && nameArr.push(fromName);
-        toName != null && nameArr.push(toName);
 
         return createTooltipMarkup('nameValue', {
-            name: nameArr.join(' > ')
+            name: itemName,
+            value,
+            // NOTE: here `value` may be `coords` (an 2D-array) if ec option is like
+            //  series: {
+            //      type: 'lines',
+            //      data: [
+            //          [[2.122232, 100.1133], [5.122232, 104.1133]],
+            //          [[22.122232, 0.1133], [25.122232, 4.1133]],
+            //      ]
+            //  }
+            // Do not display `value` in that case.
+            noValue: value == null || isNaN(value as number)
         });
     }
 
@@ -372,9 +385,17 @@ class LinesSeriesModel extends SeriesModel<LinesSeriesOption> {
         return progressiveThreshold;
     }
 
+    getZLevelKey() {
+        const effectModel = this.getModel('effect');
+        const trailLength = effectModel.get('trailLength');
+        return this.getData().count() > this.getProgressiveThreshold()
+            ? this.id // PENDING: See `GET_ZLEVEL_KEY_FOR_PROGRESSIVE`
+            : (effectModel.get('show') && trailLength > 0 ? trailLength + '' : '');
+    }
+
     static defaultOption: LinesSeriesOption = {
         coordinateSystem: 'geo',
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
         legendHoverLink: true,
 

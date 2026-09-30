@@ -33,7 +33,8 @@ import {
     OptionDataItemObject,
     SeriesEncodeOptionMixin,
     CallbackDataParams,
-    DefaultStatesMixinEmpasis
+    DefaultStatesMixinEmphasis,
+    SeriesOnRadarOptionMixin
 } from '../../util/types';
 import GlobalModel from '../../model/Global';
 import SeriesData from '../../data/SeriesData';
@@ -45,7 +46,7 @@ import {
 type RadarSeriesDataValue = OptionDataValue[];
 
 interface RadarStatesMixin {
-    emphasis?: DefaultStatesMixinEmpasis
+    emphasis?: DefaultStatesMixinEmphasis
 }
 export interface RadarSeriesStateOption<TCbParams = never> {
     lineStyle?: LineStyleOption
@@ -61,20 +62,19 @@ export interface RadarSeriesDataItemOption extends SymbolOptionMixin,
 
 export interface RadarSeriesOption
     extends SeriesOption<RadarSeriesStateOption, RadarStatesMixin>,
-    RadarSeriesStateOption,
+    RadarSeriesStateOption, SeriesOnRadarOptionMixin,
     SymbolOptionMixin<CallbackDataParams>, SeriesEncodeOptionMixin {
     type?: 'radar'
     coordinateSystem?: 'radar'
 
-    radarIndex?: number
-    radarId?: string
-
     data?: (RadarSeriesDataItemOption | RadarSeriesDataValue)[]
 }
 
+export const SERIES_TYPE_RADAR = 'radar';
+
 class RadarSeriesModel extends SeriesModel<RadarSeriesOption> {
 
-    static readonly type = 'series.radar';
+    static readonly type = 'series.' + SERIES_TYPE_RADAR;
     readonly type = RadarSeriesModel.type;
 
     static dependencies = ['radar'];
@@ -150,7 +150,7 @@ class RadarSeriesModel extends SeriesModel<RadarSeriesOption> {
     }
 
     static defaultOption: RadarSeriesOption = {
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
         colorBy: 'data',
         coordinateSystem: 'radar',

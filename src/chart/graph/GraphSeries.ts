@@ -27,7 +27,8 @@ import {
     SeriesOption,
     SeriesOnCartesianOptionMixin,
     SeriesOnPolarOptionMixin,
-    SeriesOnCalendarOptionMixin,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
     SeriesOnGeoOptionMixin,
     SeriesOnSingleOptionMixin,
     OptionDataValue,
@@ -43,7 +44,9 @@ import {
     GraphEdgeItemObject,
     OptionDataValueNumeric,
     CallbackDataParams,
-    DefaultEmphasisFocus
+    DefaultEmphasisFocus,
+    PreserveAspectMixin,
+    RoamHostModel
 } from '../../util/types';
 import SeriesModel from '../../model/Series';
 import Graph from '../../data/Graph';
@@ -54,6 +57,8 @@ import { LineDataVisual } from '../../visual/commonVisualTypes';
 import { createTooltipMarkup } from '../../component/tooltip/tooltipMarkup';
 import { defaultSeriesFormatTooltip } from '../../component/tooltip/seriesFormatTooltip';
 import {initCurvenessList, createEdgeMapForCurveness} from '../helper/multipleGraphEdgeHelper';
+import tokens from '../../visual/tokens';
+import { isViewCoordSys } from '../../coord/View';
 
 
 type GraphDataValue = OptionDataValue | OptionDataValue[];
@@ -67,7 +72,6 @@ export interface GraphNodeStateOption<TCbParams = never> {
     label?: SeriesLabelOption
 }
 
-
 interface ExtraEmphasisState {
     focus?: DefaultEmphasisFocus | 'adjacency'
 }
@@ -80,7 +84,7 @@ interface GraphEdgeStatesMixin {
 }
 
 export interface GraphNodeItemOption extends SymbolOptionMixin, GraphNodeStateOption,
-    GraphNodeStateOption, StatesOptionMixin<GraphNodeStateOption, GraphNodeStatesMixin> {
+    StatesOptionMixin<GraphNodeStateOption, GraphNodeStatesMixin> {
 
     id?: string
     name?: string
@@ -106,6 +110,7 @@ export interface GraphNodeItemOption extends SymbolOptionMixin, GraphNodeStateOp
     category?: number | string
 
     draggable?: boolean
+    cursor?: string
 }
 
 export interface GraphEdgeStateOption {
@@ -138,11 +143,13 @@ export interface GraphCategoryItemOption extends SymbolOptionMixin,
 
 export interface GraphSeriesOption
     extends SeriesOption<GraphNodeStateOption<CallbackDataParams>, GraphNodeStatesMixin>,
-    SeriesOnCartesianOptionMixin, SeriesOnPolarOptionMixin, SeriesOnCalendarOptionMixin,
+    SeriesOnCartesianOptionMixin, SeriesOnPolarOptionMixin,
+    ComponentOnCalendarOptionMixin, ComponentOnMatrixOptionMixin,
     SeriesOnGeoOptionMixin, SeriesOnSingleOptionMixin,
     SymbolOptionMixin<CallbackDataParams>,
     RoamOptionMixin,
-    BoxLayoutOptionMixin {
+    BoxLayoutOptionMixin,
+    PreserveAspectMixin {
 
     type?: 'graph'
 
@@ -165,11 +172,6 @@ export interface GraphSeriesOption
      */
     focusNodeAdjacency?: boolean
 
-    /**
-     * Symbol size scale ratio in roam
-     */
-    nodeScaleRatio?: 0.6,
-
     draggable?: boolean
 
     edgeSymbol?: string | string[]
@@ -183,7 +185,7 @@ export interface GraphSeriesOption
 
     emphasis?: {
         focus?: Exclude<GraphNodeItemOption['emphasis'], undefined>['focus']
-        scale?: boolean
+        scale?: boolean | number
         label?: SeriesLabelOption
         edgeLabel?: SeriesLabelOption
         itemStyle?: ItemStyleOption
@@ -223,10 +225,17 @@ export interface GraphSeriesOption
 
         layoutAnimation?: boolean
     }
+
+    /**
+     * auto curveness for multiple edge, invalid when `lineStyle.curveness` is set
+     */
+    autoCurveness?: boolean | number | number[]
 }
 
-class GraphSeriesModel extends SeriesModel<GraphSeriesOption> {
-    static readonly type = 'series.graph';
+export const SERIES_TYPE_GRAPH = 'graph';
+
+class GraphSeriesModel extends SeriesModel<GraphSeriesOption> implements RoamHostModel {
+    static readonly type = 'series.' + SERIES_TYPE_GRAPH;
     readonly type = GraphSeriesModel.type;
 
     static readonly dependencies = ['grid', 'polar', 'geo', 'singleAxis', 'calendar'];
@@ -391,22 +400,21 @@ class GraphSeriesModel extends SeriesModel<GraphSeriesOption> {
         });
     }
 
-    setZoom(zoom: number) {
-        this.option.zoom = zoom;
-    }
-
-    setCenter(center: number[]) {
-        this.option.center = center;
-    }
-
     isAnimationEnabled() {
         return super.isAnimationEnabled()
             // Not enable animation when do force layout
             && !(this.get('layout') === 'force' && this.get(['force', 'layoutAnimation']));
     }
 
+    __ownRoamView() {
+        // Be an exclusive coord sys of graph series iff it is a `View` coord sys.
+        // Otherwise graph series is based on an external geo or Cartesian.
+        const coordSys = this.coordinateSystem;
+        return isViewCoordSys(coordSys) && coordSys;
+    }
+
     static defaultOption: GraphSeriesOption = {
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
 
         coordinateSystem: 'view',
@@ -488,7 +496,8 @@ class GraphSeriesModel extends SeriesModel<GraphSeriesOption> {
         itemStyle: {},
 
         lineStyle: {
-            color: '#aaa',
+            // Don't use tokens.color.border because of the opacity
+            color: tokens.color.neutral50,
             width: 1,
             opacity: 0.5
         },
@@ -501,9 +510,9 @@ class GraphSeriesModel extends SeriesModel<GraphSeriesOption> {
 
         select: {
             itemStyle: {
-                borderColor: '#212121'
+                borderColor: tokens.color.primary
             }
-        }
+        },
     };
 }
 

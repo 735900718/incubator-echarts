@@ -33,10 +33,12 @@ import {
     OptionEncodeValue,
     Dictionary,
     OptionEncode,
-    DefaultStatesMixinEmpasis,
+    DefaultStatesMixinEmphasis,
     ZRColor,
-    CallbackDataParams
- } from '../../util/types';
+    CallbackDataParams,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin
+} from '../../util/types';
 import GlobalModel from '../../model/Global';
 import SeriesData from '../../data/SeriesData';
 import { ParallelActiveState, ParallelAxisOption } from '../../coord/parallel/AxisModel';
@@ -46,7 +48,7 @@ import ParallelModel from '../../coord/parallel/ParallelModel';
 type ParallelSeriesDataValue = OptionDataValue[];
 
 interface ParallelStatesMixin {
-    emphasis?: DefaultStatesMixinEmpasis
+    emphasis?: DefaultStatesMixinEmphasis
 }
 export interface ParallelStateOption<TCbParams = never> {
     lineStyle?: LineStyleOption<(TCbParams extends never ? never : (params: TCbParams) => ZRColor) | ZRColor>
@@ -55,11 +57,13 @@ export interface ParallelStateOption<TCbParams = never> {
 
 export interface ParallelSeriesDataItemOption extends ParallelStateOption,
     StatesOptionMixin<ParallelStateOption, ParallelStatesMixin> {
-    value?: ParallelSeriesDataValue[]
+    value?: ParallelSeriesDataValue
 }
 export interface ParallelSeriesOption extends
     SeriesOption<ParallelStateOption<CallbackDataParams>, ParallelStatesMixin>,
     ParallelStateOption<CallbackDataParams>,
+    ComponentOnCalendarOptionMixin,
+    ComponentOnMatrixOptionMixin,
     SeriesEncodeOptionMixin {
 
     type?: 'parallel';
@@ -121,7 +125,7 @@ class ParallelSeriesModel extends SeriesModel<ParallelSeriesOption> {
     }
 
     static defaultOption: ParallelSeriesOption = {
-        zlevel: 0,
+        // zlevel: 0,
         z: 2,
 
         coordinateSystem: 'parallel',
@@ -145,7 +149,7 @@ class ParallelSeriesModel extends SeriesModel<ParallelSeriesOption> {
             }
         },
 
-        progressive: 500,
+        progressive: 300,
         smooth: false, // true | false | number
 
         animationEasing: 'linear'

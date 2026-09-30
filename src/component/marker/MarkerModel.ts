@@ -28,7 +28,9 @@ import {
     AnimationOptionMixin,
     Dictionary,
     CommonTooltipOption,
-    ScaleDataValue
+    ScaleDataValue,
+    CallbackDataParams,
+    SeriesDataType
 } from '../../util/types';
 import Model from '../../model/Model';
 import GlobalModel from '../../model/Global';
@@ -51,6 +53,7 @@ export interface MarkerPositionOption {
     // Absolute position, px or percent string
     x?: number | string
     y?: number | string
+    relativeTo?: 'container' | 'coordinate'
 
     /**
      * Coord on any coordinate system
@@ -104,6 +107,8 @@ abstract class MarkerModel<Opts extends MarkerOption = MarkerOption> extends Com
      * If marker model is created by self from series
      */
     createdBySelf = false;
+
+    preventAutoZ = true;
 
     static readonly dependencies = ['series', 'grid', 'polar', 'geo'];
 
@@ -225,6 +230,20 @@ abstract class MarkerModel<Opts extends MarkerOption = MarkerOption> extends Com
         this._data = data;
     }
 
+    getDataParams(
+        dataIndex: number,
+        dataType?: SeriesDataType
+    ): CallbackDataParams {
+        const params = DataFormatMixin.prototype.getDataParams.call(this, dataIndex, dataType);
+        const hostSeries = this.__hostSeries;
+        if (hostSeries) {
+            params.seriesId = hostSeries.id;
+            params.seriesName = hostSeries.name;
+            params.seriesType = hostSeries.subType;
+        }
+        return params;
+    }
+
     /**
      * Create slave marker model from series.
      */
@@ -243,6 +262,7 @@ abstract class MarkerModel<Opts extends MarkerOption = MarkerOption> extends Com
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface MarkerModel<Opts extends MarkerOption = MarkerOption> extends DataFormatMixin {}
 zrUtil.mixin(MarkerModel, DataFormatMixin.prototype);
 

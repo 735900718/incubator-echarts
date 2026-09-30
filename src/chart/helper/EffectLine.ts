@@ -28,9 +28,10 @@ import {createSymbol} from '../../util/symbol';
 import * as vec2 from 'zrender/src/core/vector';
 import * as curveUtil from 'zrender/src/core/curve';
 import type SeriesData from '../../data/SeriesData';
-import { LineDrawSeriesScope, LineDrawModelOption } from './LineDraw';
+import { LineDrawSeriesScope } from './LineDraw';
 import Model from '../../model/Model';
 import { ColorString } from '../../util/types';
+import { LineDrawModelOption } from './baseDraw';
 
 export type ECSymbolOnEffectLine = ReturnType<typeof createSymbol> & {
     __t: number
@@ -46,6 +47,8 @@ class EffectLine extends graphic.Group {
     private _period: number;
 
     private _loop: boolean;
+
+    private _roundTrip: boolean;
 
     private _symbolScale: number[];
 
@@ -117,12 +120,11 @@ class EffectLine extends graphic.Group {
             return;
         }
 
-        const self = this;
-
         const points = lineData.getItemLayout(idx);
 
         let period = effectModel.get('period') * 1000;
         const loop = effectModel.get('loop');
+        const roundTrip = effectModel.get('roundTrip');
         const constantSpeed = effectModel.get('constantSpeed');
         const delayExpr = zrUtil.retrieve(effectModel.get('delay'), function (idx) {
             return idx / lineData.count() * period / 3;
@@ -137,41 +139,49 @@ class EffectLine extends graphic.Group {
             period = this._getLineLength(symbol) / constantSpeed * 1000;
         }
 
-        if (period !== this._period || loop !== this._loop) {
-
+        if (period !== this._period || loop !== this._loop || roundTrip !== this._roundTrip) {
             symbol.stopAnimation();
-
-            if (period > 0) {
-                let delayNum: number;
-                if (typeof delayExpr === 'function') {
-                    delayNum = delayExpr(idx);
-                }
-                else {
-                    delayNum = delayExpr;
-                }
-                if (symbol.__t > 0) {
-                    delayNum = -period * symbol.__t;
-                }
-                symbol.__t = 0;
-                const animator = symbol.animate('', loop)
-                    .when(period, {
-                        __t: 1
-                    })
-                    .delay(delayNum)
-                    .during(function () {
-                        self._updateSymbolPosition(symbol);
-                    });
-                if (!loop) {
-                    animator.done(function () {
-                        self.remove(symbol);
-                    });
-                }
-                animator.start();
+            let delayNum: number;
+            if (zrUtil.isFunction(delayExpr)) {
+                delayNum = delayExpr(idx);
             }
+            else {
+                delayNum = delayExpr;
+            }
+            if (symbol.__t > 0) {
+                delayNum = -period * symbol.__t;
+            }
+
+            this._animateSymbol(
+                symbol, period, delayNum, loop, roundTrip
+            );
         }
 
         this._period = period;
         this._loop = loop;
+        this._roundTrip = roundTrip;
+    }
+
+    private _animateSymbol(
+        symbol: ECSymbolOnEffectLine, period: number, delayNum: number, loop: boolean, roundTrip: boolean) {
+        if (period > 0) {
+            symbol.__t = 0;
+            const self = this;
+            const animator = symbol.animate('', loop)
+                .when(roundTrip ? period * 2 : period, {
+                    __t: roundTrip ? 2 : 1
+                })
+                .delay(delayNum)
+                .during(function () {
+                    self._updateSymbolPosition(symbol);
+                });
+            if (!loop) {
+                animator.done(function () {
+                    self.remove(symbol);
+                });
+            }
+            animator.start();
+        }
     }
 
     protected _getLineLength(symbol: ECSymbolOnEffectLine) {
@@ -198,7 +208,7 @@ class EffectLine extends graphic.Group {
         const p1 = symbol.__p1;
         const p2 = symbol.__p2;
         const cp1 = symbol.__cp1;
-        const t = symbol.__t;
+        const t = symbol.__t <= 1 ? symbol.__t : 2 - symbol.__t;
         const pos = [symbol.x, symbol.y];
         const lastPos = pos.slice();
         const quadraticAt = curveUtil.quadraticAt;
@@ -207,8 +217,11 @@ class EffectLine extends graphic.Group {
         pos[1] = quadraticAt(p1[1], cp1[1], p2[1], t);
 
         // Tangent
-        const tx = quadraticDerivativeAt(p1[0], cp1[0], p2[0], t);
-        const ty = quadraticDerivativeAt(p1[1], cp1[1], p2[1], t);
+        const tx = symbol.__t <= 1 ? quadraticDerivativeAt(p1[0], cp1[0], p2[0], t)
+                 : quadraticDerivativeAt(p2[0], cp1[0], p1[0], 1 - t);
+        const ty = symbol.__t <= 1 ? quadraticDerivativeAt(p1[1], cp1[1], p2[1], t)
+                 : quadraticDerivativeAt(p2[1], cp1[1], p1[1], 1 - t);
+
 
         symbol.rotation = -Math.atan2(ty, tx) - Math.PI / 2;
         // enable continuity trail for 'line', 'rect', 'roundRect' symbolType

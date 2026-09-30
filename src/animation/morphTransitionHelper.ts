@@ -28,8 +28,8 @@ import {
 import { Path } from '../util/graphic';
 import SeriesModel from '../model/Series';
 import Element, { ElementAnimateConfig } from 'zrender/src/Element';
-import { defaults, isArray} from 'zrender/src/core/util';
-import { getAnimationConfig } from './basicTrasition';
+import { defaults, extend, isArray} from 'zrender/src/core/util';
+import { getAnimationConfig } from './basicTransition';
 import { ECElement, UniversalTransitionOption } from '../util/types';
 import { clonePath } from 'zrender/src/tool/path';
 import Model from '../model/Model';
@@ -133,7 +133,7 @@ export function applyMorphAnimation(
         .get('delay');
 
 
-    const animationCfg = Object.assign({
+    const animationCfg = extend({
         // Need to setToFinal so the further calculation based on the style can be correct.
         // Like emphasis color.
         setToFinal: true
